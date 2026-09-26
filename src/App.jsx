@@ -1,122 +1,61 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState } from 'react';
+import Header from './components/Header';
+import SearchBox from './components/SearchBox';
+import MapPlaceholder from './components/MapPlaceholder';
+import RouteComparison from './components/RouteComparison';
+import PreferenceControls from './components/PreferenceControls';
+import EnvironmentalInfo from './components/EnvironmentalInfo';
+import RouteExplanation from './components/RouteExplanation';
+import { mockRoutes, defaultPreferences } from './mockData';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [preferences, setPreferences] = useState(defaultPreferences);
+  const [selectedRoute, setSelectedRoute] = useState(mockRoutes[1]); // Default to Greener Route
+
+  const handleSelectRoute = (route) => {
+    setSelectedRoute(route);
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-greenroute-200 selection:text-greenroute-900">
+      <Header />
+      
+      <main className="flex-1 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8 flex flex-col xl:flex-row gap-8">
+        
+        {/* Left Sidebar - Search and Preferences */}
+        <div className="w-full xl:w-[380px] flex flex-col shrink-0">
+          <SearchBox />
+          <PreferenceControls 
+            preferences={preferences} 
+            onChange={setPreferences} 
+          />
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+        {/* Center/Main Area - Map and Details */}
+        <div className="flex-1 flex flex-col min-w-0 gap-8">
+          <div className="h-[450px] lg:h-[550px] w-full shrink-0">
+            <MapPlaceholder />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <RouteComparison 
+                routes={mockRoutes} 
+                selectedRoute={selectedRoute} 
+                onSelectRoute={handleSelectRoute} 
+              />
+            </div>
+            
+            <div className="flex flex-col h-full">
+              <h2 className="text-xl font-bold text-slate-800 mb-5 pl-1">Route Details</h2>
+              <EnvironmentalInfo route={selectedRoute} />
+              <RouteExplanation route={selectedRoute} />
+            </div>
+          </div>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      </main>
+    </div>
+  );
 }
 
-export default App
+export default App;
