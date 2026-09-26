@@ -4,5 +4,15 @@ export { Edge } from './models/Edge.js';
 export { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 export { Route } from './models/Route.js';
 export { findDijkstraRoute, findAStarRoute } from './router.js';
-export { calculateRouteScore, rankRoutes } from './scoring.js';
-export { createDemoGraph, runDijkstraTest } from './demo.js';
+export {
+  calculateRouteScore,
+  rankRoutes,
+  DEFAULT_WEIGHTS,
+  WEIGHT_PROFILES,
+  ALL_FACTORS,
+  extractRouteFactors,
+  computeFactorBounds,
+  normalizeFactors,
+} from './scoring.js';
+export { createDemoGraph, createCandidateRoutesDemo, runDijkstraTest, runScoringTest } from './demo.js';
+
