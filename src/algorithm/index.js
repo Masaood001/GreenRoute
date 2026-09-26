@@ -3,7 +3,7 @@ export { Node } from './models/Node.js';
 export { Edge } from './models/Edge.js';
 export { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 export { Route } from './models/Route.js';
-export { findDijkstraRoute, findAStarRoute } from './router.js';
+export { findDijkstraRoute, findCandidateRoutes, resolveWeights, findAStarRoute } from './router.js';
 export {
   calculateRouteScore,
   rankRoutes,

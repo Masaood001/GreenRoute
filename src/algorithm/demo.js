@@ -1,23 +1,26 @@
 import { Graph } from './Graph.js';
-import { findDijkstraRoute } from './router.js';
+import { findDijkstraRoute, findCandidateRoutes } from './router.js';
 import { Route } from './models/Route.js';
 import { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 import { rankRoutes, WEIGHT_PROFILES, calculateRouteScore } from './scoring.js';
 
 /**
- * Hardcoded sample graph representing a 4-node network for testing Dijkstra shortest path.
+ * Hardcoded sample graph representing a network with 4 distinct alternative paths
+ * between Origin (Node A) and Destination (Node D) for testing pathfinding and ranking.
  * 
  * Nodes:
  * - A: Start Node (Main St Hub)
- * - B: Mid Node via Park (Longer distance, clean/green environment)
- * - C: Mid Node via Industrial (Shorter distance, dirty/hot environment)
+ * - B: Green Park Ave
+ * - C: Industrial Blvd
  * - D: Destination Node (Eco Quarter)
+ * - E: Expressway Overpass (Fast travel time)
+ * - F: Canopy Greenway Path (Maximum shade & greenery)
  * 
- * Edge Distances:
- * - A -> B (300m), B -> D (400m) => Total = 700m
- * - A -> C (500m), C -> D (150m) => Total = 650m
- * 
- * Expected Shortest Path (Distance Only): A -> C -> D (650m)
+ * Distinct Alternative Paths between A and D:
+ * 1. A -> C -> D : Industrial Short Cut (Distance: 650m, Time: 390s, High pollution)
+ * 2. A -> B -> D : Green Park Boulevard (Distance: 700m, Time: 420s, Clean & green)
+ * 3. A -> E -> D : Expressway Direct (Distance: 750m, Time: 270s, Fastest time)
+ * 4. A -> F -> D : Canopy Eco Greenway (Distance: 850m, Time: 510s, Max greenery & shade)
  * 
  * @returns {Graph}
  */
@@ -29,12 +32,24 @@ export function createDemoGraph() {
   graph.addNode('B', { lat: 37.7755, lng: -122.4180 }, { name: 'Green Park Ave' });
   graph.addNode('C', { lat: 37.7760, lng: -122.4170 }, { name: 'Industrial Blvd' });
   graph.addNode('D', { lat: 37.7770, lng: -122.4160 }, { name: 'Eco Quarter' });
+  graph.addNode('E', { lat: 37.7765, lng: -122.4190 }, { name: 'Expressway Overpass' });
+  graph.addNode('F', { lat: 37.7740, lng: -122.4175 }, { name: 'Canopy Greenway Path' });
 
-  // Add edges (Source, Destination, Distance (meters), Travel Time (seconds), EnvironmentalAttributes)
-  graph.addEdge('A', 'B', 300, 180, { pollution: 20, heat: 22, greenery: 0.8, shade: 0.7 });
+  // Path 1: Industrial (Shortest distance: 650m)
   graph.addEdge('A', 'C', 500, 300, { pollution: 80, heat: 35, greenery: 0.1, shade: 0.2 });
-  graph.addEdge('B', 'D', 400, 240, { pollution: 15, heat: 20, greenery: 0.9, shade: 0.85 });
   graph.addEdge('C', 'D', 150, 90, { pollution: 75, heat: 33, greenery: 0.2, shade: 0.15 });
+
+  // Path 2: Green Park (Eco balanced: 700m)
+  graph.addEdge('A', 'B', 300, 180, { pollution: 20, heat: 22, greenery: 0.8, shade: 0.7 });
+  graph.addEdge('B', 'D', 400, 240, { pollution: 15, heat: 20, greenery: 0.9, shade: 0.85 });
+
+  // Path 3: Expressway (Fastest time: 270s)
+  graph.addEdge('A', 'E', 350, 120, { pollution: 50, heat: 28, greenery: 0.3, shade: 0.25 });
+  graph.addEdge('E', 'D', 400, 150, { pollution: 50, heat: 28, greenery: 0.4, shade: 0.35 });
+
+  // Path 4: Canopy Eco Greenway (Max greenery & shade)
+  graph.addEdge('A', 'F', 400, 240, { pollution: 10, heat: 18, greenery: 0.95, shade: 0.90 });
+  graph.addEdge('F', 'D', 450, 270, { pollution: 10, heat: 18, greenery: 0.95, shade: 0.90 });
 
   return graph;
 }
@@ -126,15 +141,17 @@ function logRankingProfile(profileName, rankedRoutes) {
   console.log(`--------------------------------------------------`);
 
   rankedRoutes.forEach((route) => {
-    console.log(`Rank ${route.rank}: [${route.id}] "${route.name}"`);
-    console.log(`  Final Composite Score: ${route.score} / 100`);
-    console.log(`  Normalized Factor Scores (1.0 = optimal):`);
-    console.log(`    Time      : ${route.normalizedFactors.time}`);
-    console.log(`    Distance  : ${route.normalizedFactors.distance}`);
-    console.log(`    Pollution : ${route.normalizedFactors.pollution}`);
-    console.log(`    Heat      : ${route.normalizedFactors.heat}`);
-    console.log(`    Greenery  : ${route.normalizedFactors.greenery}`);
-    console.log(`    Shade     : ${route.normalizedFactors.shade}`);
+    console.log(`Rank ${route.rank}: [${route.id}] "${route.name}" (${route.nodeIds.join(' -> ')})`);
+    console.log(`  Distance: ${route.totalDistance}m | Time: ${route.totalTime}s | Eco Score: ${route.score} / 100`);
+    if (route.normalizedFactors) {
+      console.log(`  Normalized Factor Scores (1.0 = optimal):`);
+      console.log(`    Time      : ${route.normalizedFactors.time}`);
+      console.log(`    Distance  : ${route.normalizedFactors.distance}`);
+      console.log(`    Pollution : ${route.normalizedFactors.pollution}`);
+      console.log(`    Heat      : ${route.normalizedFactors.heat}`);
+      console.log(`    Greenery  : ${route.normalizedFactors.greenery}`);
+      console.log(`    Shade     : ${route.normalizedFactors.shade}`);
+    }
   });
 }
 
@@ -215,12 +232,60 @@ export function runScoringTest() {
   return allPassed;
 }
 
+/**
+ * Demonstrates generating multiple candidate routes dynamically from a graph,
+ * scoring each route, ranking candidates, and verifying that changing preference weights alters the ranking.
+ * 
+ * @returns {boolean} True if candidate route generation & ranking test passes
+ */
+export function runCandidateRoutesTest() {
+  console.log('\n==================================================');
+  console.log('=== MULTIPLE CANDIDATE ROUTES & RANKING DEMO ===');
+  console.log('==================================================');
+
+  const graph = createDemoGraph();
+  const startNode = 'A';
+  const targetNode = 'D';
+
+  // 1. Generate & rank candidate routes with Balanced preference
+  const balancedCandidates = findCandidateRoutes(graph, startNode, targetNode, { preference: 'balanced' });
+  logRankingProfile('1. Graph Candidate Routes - Balanced Preference', balancedCandidates);
+
+  // 2. Generate & rank candidate routes with Time-focused preference
+  const timeCandidates = findCandidateRoutes(graph, startNode, targetNode, { preference: 'time' });
+  logRankingProfile('2. Graph Candidate Routes - Time-Focused Preference', timeCandidates);
+
+  // 3. Generate & rank candidate routes with Environment-focused preference
+  const ecoCandidates = findCandidateRoutes(graph, startNode, targetNode, { preference: 'environment' });
+  logRankingProfile('3. Graph Candidate Routes - Environment-Focused Preference', ecoCandidates);
+
+  // Verification assertions
+  console.log('\n--- Candidate Route Generation Verification ---');
+  console.log(`Generated Route Count: ${balancedCandidates.length}`);
+  const multiRoutesPassed = balancedCandidates.length >= 3;
+  console.log(`Multiple Routes Generated (>=3): ${multiRoutesPassed ? 'PASSED' : 'FAILED'}`);
+
+  const timeWinner = timeCandidates[0];
+  const ecoWinner = ecoCandidates[0];
+
+  console.log(`Time Preference Rank #1 Route       : ${timeWinner.name} (${timeWinner.nodeIds.join(' -> ')}) [Score: ${timeWinner.score}]`);
+  console.log(`Environment Preference Rank #1 Route: ${ecoWinner.name} (${ecoWinner.nodeIds.join(' -> ')}) [Score: ${ecoWinner.score}]`);
+
+  const dynamicRankingPassed = timeWinner.id !== ecoWinner.id || timeWinner.nodeIds.join('->') !== ecoWinner.nodeIds.join('->');
+  console.log(`Preference Weight Shift Test        : ${dynamicRankingPassed ? 'PASSED (Rank #1 route changed with user preference)' : 'FAILED'}`);
+
+  const passed = multiRoutesPassed && dynamicRankingPassed;
+  console.log(`\nCandidate Routes Test Result        : ${passed ? 'PASSED' : 'FAILED'}`);
+  return passed;
+}
+
 // Execute tests when module is run directly via Node
 if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
   const dijkstraOk = runDijkstraTest();
   const scoringOk = runScoringTest();
+  const candidateOk = runCandidateRoutesTest();
 
-  if (!dijkstraOk || !scoringOk) {
+  if (!dijkstraOk || !scoringOk || !candidateOk) {
     process.exit(1);
   }
 }
