@@ -14,5 +14,8 @@ export {
   computeFactorBounds,
   normalizeFactors,
 } from './scoring.js';
-export { createDemoGraph, createCandidateRoutesDemo, runDijkstraTest, runScoringTest } from './demo.js';
+export { createDemoGraph, createCandidateRoutesDemo, runDijkstraTest, runScoringTest, runCandidateRoutesTest, runCampusGraphTest } from './demo.js';
+
+export { createCampusGraph, CAMPUS_NODES, CAMPUS_EDGES, IS_SAMPLE_DATASET } from './data/campusGraph.js';
+
 

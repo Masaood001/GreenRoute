@@ -3,6 +3,8 @@ import { findDijkstraRoute, findCandidateRoutes } from './router.js';
 import { Route } from './models/Route.js';
 import { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 import { rankRoutes, WEIGHT_PROFILES, calculateRouteScore } from './scoring.js';
+import { createCampusGraph, CAMPUS_NODES, CAMPUS_EDGES, IS_SAMPLE_DATASET } from './data/campusGraph.js';
+
 
 /**
  * Hardcoded sample graph representing a network with 4 distinct alternative paths
@@ -279,13 +281,103 @@ export function runCandidateRoutesTest() {
   return passed;
 }
 
+/**
+ * Executes tests and demonstration of the Real Campus Graph Data Foundation.
+ * Verifies graph creation, connectivity, Dijkstra routing, candidate route generation,
+ * multi-profile ranking, and invalid node handling on the campus graph dataset.
+ * 
+ * @returns {boolean} True if all campus graph tests pass
+ */
+export function runCampusGraphTest() {
+  console.log('\n==================================================');
+  console.log('=== REAL CAMPUS GRAPH DATA FOUNDATION DEMO ===');
+  console.log('==================================================');
+
+  // 1. Campus Graph Creation
+  const campusGraph = createCampusGraph();
+  console.log(`Campus Graph Created successfully.`);
+  console.log(`- Nodes count: ${campusGraph.nodes.size} (Expected: ${CAMPUS_NODES.length})`);
+  console.log(`- Dataset edges count: ${CAMPUS_EDGES.length}`);
+  const nodesOk = campusGraph.nodes.size === CAMPUS_NODES.length && CAMPUS_EDGES.length > 0;
+
+
+  // Verify node structure & sample coordinates marker
+  const n1 = campusGraph.getNode('N1');
+  const sampleMarkerOk = IS_SAMPLE_DATASET && n1 && n1.metadata.isSampleCoordinate === true;
+  console.log(`- Node 'N1' metadata: "${n1?.metadata?.name}" [Sample coords: lat=${n1?.coordinates?.lat}, lng=${n1?.coordinates?.lng}]`);
+  console.log(`- Sample coordinates clearly marked: ${sampleMarkerOk ? 'PASSED' : 'FAILED'}`);
+
+  // 2. Node & Edge Connectivity
+  const n1Neighbors = campusGraph.getNeighbors('N1');
+  console.log(`- Node 'N1' connected outgoing edges count: ${n1Neighbors.length}`);
+  const connectivityOk = campusGraph.hasNode('N1') && campusGraph.hasNode('N7') && n1Neighbors.length >= 3;
+  console.log(`- Connectivity verification: ${connectivityOk ? 'PASSED' : 'FAILED'}`);
+
+  // 3. Dijkstra Route Generation (Origin N1 to Destination N7)
+  const singleRoute = findDijkstraRoute(campusGraph, 'N1', 'N7');
+  console.log('\n--- Dijkstra Shortest Path on Campus Graph (N1 -> N7) ---');
+  let dijkstraOk = false;
+  if (singleRoute) {
+    console.log(`Path: ${singleRoute.nodeIds.join(' -> ')}`);
+    console.log(`Total Distance: ${singleRoute.totalDistance}m | Travel Time: ${singleRoute.totalTime}s`);
+    console.log(`Aggregated Env: Pollution=${singleRoute.aggregatedEnvironmental.pollution}, Heat=${singleRoute.aggregatedEnvironmental.heat}, Greenery=${singleRoute.aggregatedEnvironmental.greenery}, Shade=${singleRoute.aggregatedEnvironmental.shade}`);
+    dijkstraOk = singleRoute.nodeIds[0] === 'N1' && singleRoute.nodeIds[singleRoute.nodeIds.length - 1] === 'N7';
+  }
+  console.log(`Dijkstra Route Generation: ${dijkstraOk ? 'PASSED' : 'FAILED'}`);
+
+  // 4. Multiple Candidate Route Generation
+  console.log('\n--- Candidate Route Generation on Campus Graph (N1 -> N7) ---');
+  const candidatesBalanced = findCandidateRoutes(campusGraph, 'N1', 'N7', { preference: 'balanced' });
+  const candidatesTime = findCandidateRoutes(campusGraph, 'N1', 'N7', { preference: 'time' });
+  const candidatesEco = findCandidateRoutes(campusGraph, 'N1', 'N7', { preference: 'environment' });
+
+  logRankingProfile('Campus Graph - Balanced Profile', candidatesBalanced);
+  logRankingProfile('Campus Graph - Time-Focused Profile', candidatesTime);
+  logRankingProfile('Campus Graph - Environment-Focused Profile', candidatesEco);
+
+  const candidateCountOk = candidatesBalanced.length >= 3;
+  console.log(`Candidate Route Generation (Count >= 3): ${candidateCountOk ? 'PASSED' : 'FAILED'} (Generated ${candidatesBalanced.length} routes)`);
+
+  // 5. Profile Sensitivity Verification
+  const timeWinner = candidatesTime[0];
+  const ecoWinner = candidatesEco[0];
+  const rankingOk = timeWinner.id !== ecoWinner.id || timeWinner.nodeIds.join('->') !== ecoWinner.nodeIds.join('->');
+  console.log(`Profile Sensitivity (Time winner != Eco winner): ${rankingOk ? 'PASSED' : 'FAILED'}`);
+  console.log(`  Fastest Route (#1 Time Profile): ${timeWinner.name} (${timeWinner.nodeIds.join(' -> ')}) - ${timeWinner.totalTime}s`);
+  console.log(`  Eco Route (#1 Eco Profile)     : ${ecoWinner.name} (${ecoWinner.nodeIds.join(' -> ')}) - Eco Score: ${ecoWinner.score}`);
+
+  // 6. Invalid / Missing Node Handling
+  console.log('\n--- Invalid / Missing Node Handling ---');
+  const invalidStartDijkstra = findDijkstraRoute(campusGraph, 'NON_EXISTENT_NODE', 'N7');
+  const invalidTargetDijkstra = findDijkstraRoute(campusGraph, 'N1', 'INVALID_TARGET');
+  const invalidStartCandidates = findCandidateRoutes(campusGraph, 'UNKNOWN_ORIGIN', 'N7');
+  const invalidTargetCandidates = findCandidateRoutes(campusGraph, 'N1', 'UNKNOWN_DEST');
+  const nullGraphCandidates = findCandidateRoutes(null, 'N1', 'N7');
+
+  const invalidHandlingOk =
+    invalidStartDijkstra === null &&
+    invalidTargetDijkstra === null &&
+    Array.isArray(invalidStartCandidates) && invalidStartCandidates.length === 0 &&
+    Array.isArray(invalidTargetCandidates) && invalidTargetCandidates.length === 0 &&
+    Array.isArray(nullGraphCandidates) && nullGraphCandidates.length === 0;
+
+  console.log(`Invalid Node Handling Test: ${invalidHandlingOk ? 'PASSED' : 'FAILED'}`);
+
+  const allPassed = nodesOk && sampleMarkerOk && connectivityOk && dijkstraOk && candidateCountOk && rankingOk && invalidHandlingOk;
+  console.log(`\nOverall Campus Graph Data Foundation Test Result: ${allPassed ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED'}`);
+
+  return allPassed;
+}
+
 // Execute tests when module is run directly via Node
 if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
   const dijkstraOk = runDijkstraTest();
   const scoringOk = runScoringTest();
   const candidateOk = runCandidateRoutesTest();
+  const campusOk = runCampusGraphTest();
 
-  if (!dijkstraOk || !scoringOk || !candidateOk) {
+  if (!dijkstraOk || !scoringOk || !candidateOk || !campusOk) {
     process.exit(1);
   }
 }
+
