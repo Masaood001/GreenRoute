@@ -1,11 +1,19 @@
 export default function RouteCard({ route, isSelected, onClick }) {
   return (
     <div 
+      role="button"
+      tabIndex={0}
       onClick={() => onClick(route)}
-      className={`p-5 rounded-2xl border cursor-pointer transition-all duration-300 relative overflow-hidden group ${
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick(route);
+        }
+      }}
+      className={`p-5 rounded-2xl border cursor-pointer transition-colors duration-200 relative overflow-hidden group focus:outline-none focus:ring-2 focus:ring-greenroute-500 focus:ring-offset-2 ${
         isSelected 
-          ? 'border-greenroute-500 bg-greenroute-50/30 shadow-md ring-2 ring-greenroute-500/20' 
-          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-lg hover:-translate-y-1'
+          ? 'border-greenroute-500 bg-greenroute-50/50 shadow-sm' 
+          : 'border-slate-200 bg-white hover:bg-slate-50'
       }`}
     >
       {isSelected && (
@@ -22,11 +30,11 @@ export default function RouteCard({ route, isSelected, onClick }) {
           }`}>
             {route.category}
           </span>
-          <h3 className="font-extrabold text-slate-900 text-lg leading-tight">{route.name}</h3>
+          <h3 className="font-bold text-slate-900 text-lg leading-tight">{route.name}</h3>
         </div>
         <div className="text-right">
-          <div className="font-extrabold text-2xl text-slate-900 tracking-tight">{route.duration}</div>
-          <div className="text-sm font-semibold text-slate-500">{route.distance}</div>
+          <div className="font-bold text-2xl text-slate-900 tracking-normal">{route.duration}</div>
+          <div className="text-sm font-medium text-slate-500">{route.distance}</div>
         </div>
       </div>
       
