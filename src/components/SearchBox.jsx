@@ -5,67 +5,70 @@ export default function SearchBox() {
 
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-      <h2 className="text-lg font-bold text-slate-800 mb-5">Plan Your Route</h2>
+      <h2 className="text-xl font-bold text-slate-800 mb-5">Plan Your Route</h2>
       
       <div className="space-y-5">
-        {/* Origin / Dest Inputs */}
-        <div className="relative flex flex-col gap-4">
-          {/* Connecting Line */}
-          <div className="absolute left-[15px] top-[24px] bottom-[24px] w-[2px] bg-slate-200 z-0"></div>
-          
-          <div className="relative z-10 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-300 flex flex-shrink-0 items-center justify-center">
-              <div className="w-2.5 h-2.5 bg-slate-600 rounded-full"></div>
+        <div>
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Origin</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+              <div className="w-3 h-3 rounded-full border-2 border-slate-400 group-focus-within:border-slate-600 transition-colors"></div>
             </div>
             <input 
               type="text" 
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-greenroute-500 focus:ring-1 focus:ring-greenroute-500 transition-colors"
-              placeholder="Origin (e.g. Library)"
+              className="block w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-greenroute-500 focus:border-greenroute-500 sm:text-sm transition-all outline-none" 
+              placeholder="Enter starting point"
             />
           </div>
+        </div>
 
-          <div className="relative z-10 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-greenroute-50 border border-greenroute-200 flex flex-shrink-0 items-center justify-center">
-              <svg className="w-4 h-4 text-greenroute-600" fill="currentColor" viewBox="0 0 20 20">
+        <div className="relative h-2">
+          <div className="absolute left-5 -top-2 bottom-0 w-0.5 bg-slate-200"></div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Destination</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg className="w-5 h-5 text-greenroute-600" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
               </svg>
             </div>
             <input 
               type="text" 
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-greenroute-500 focus:ring-1 focus:ring-greenroute-500 transition-colors"
-              placeholder="Destination (e.g. Science Block)"
+              className="block w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-greenroute-500 focus:border-greenroute-500 sm:text-sm transition-all outline-none" 
+              placeholder="Enter destination"
             />
           </div>
         </div>
 
-        {/* Travel Mode */}
-        <div className="pt-2">
-          <label className="block text-sm font-semibold text-slate-700 mb-2">Travel Mode</label>
-          <div className="flex bg-slate-100 p-1 rounded-lg">
+        <div>
+          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Travel Mode</label>
+          <div className="flex gap-3">
             <button 
               onClick={() => setTravelMode('walking')}
-              className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-md text-sm font-semibold transition-colors ${
-                travelMode === 'walking' 
-                  ? 'bg-white text-slate-800 shadow-sm border border-slate-200/50' 
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl border transition-all duration-200 ${travelMode === 'walking' ? 'bg-greenroute-50 border-greenroute-600 text-greenroute-800 ring-2 ring-greenroute-600/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:shadow-sm'}`}
             >
-              Walking
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 21v-7.5a2.25 2.25 0 00-2.25-2.25h-1.5a1.5 1.5 0 01-1.5-1.5v-1.5a1.5 1.5 0 011.5-1.5h1.5a2.25 2.25 0 002.25-2.25V2.25" />
+              </svg>
+              <span className="text-sm font-semibold">Walking</span>
             </button>
             <button 
               onClick={() => setTravelMode('cycling')}
-              className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-md text-sm font-semibold transition-colors ${
-                travelMode === 'cycling' 
-                  ? 'bg-white text-slate-800 shadow-sm border border-slate-200/50' 
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl border transition-all duration-200 ${travelMode === 'cycling' ? 'bg-greenroute-50 border-greenroute-600 text-greenroute-800 ring-2 ring-greenroute-600/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:shadow-sm'}`}
             >
-              Cycling
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16a2 2 0 001.996-2.047L10 13V9a2 2 0 00-2-2H6a2 2 0 00-2 2v4c0 1.053.895 1.953 1.996 2.047A2 2 0 008 16zm0 0a2 2 0 002-2H6a2 2 0 002 2zm8 0a2 2 0 001.996-2.047L18 13V9a2 2 0 00-2-2h-2a2 2 0 00-2 2v4c0 1.053.895 1.953 1.996 2.047A2 2 0 0016 16zm0 0a2 2 0 002-2h-4a2 2 0 002 2z" />
+              </svg>
+              <span className="text-sm font-semibold">Cycling</span>
             </button>
           </div>
         </div>
 
-        <button className="w-full mt-2 bg-greenroute-600 text-white py-3 rounded-lg font-bold hover:bg-greenroute-700 focus:outline-none focus:ring-2 focus:ring-greenroute-500 focus:ring-offset-2 transition-colors">
+        <button 
+          className="w-full mt-4 bg-slate-900 text-white py-3.5 px-4 rounded-xl font-bold hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-slate-900/20 transition-all shadow-md hover:shadow-lg active:scale-[0.98] outline-none"
+        >
           Generate Routes
         </button>
       </div>
