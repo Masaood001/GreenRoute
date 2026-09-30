@@ -2,7 +2,7 @@ export default function RouteExplanation({ route }) {
   if (!route) return null;
 
   return (
-    <div className="bg-greenroute-50/70 p-6 rounded-2xl border border-greenroute-200 shadow-sm relative overflow-hidden">
+    <div className="bg-greenroute-50/70 p-4 sm:p-6 rounded-2xl border border-greenroute-200 shadow-sm relative overflow-hidden">
       {/* Decorative background element */}
       <div className="absolute -right-4 -top-4 w-24 h-24 bg-greenroute-100 rounded-full opacity-50 blur-2xl pointer-events-none"></div>
       

@@ -4,10 +4,10 @@ export default function PreferenceControls({ preferences, onChange }) {
   };
 
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mt-6">
-      <h3 className="text-lg font-bold text-slate-800 mb-6">Route Preferences</h3>
+    <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 mt-6">
+      <h3 className="text-base sm:text-lg font-bold text-slate-800 mb-4 sm:mb-6">Route Preferences</h3>
       
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6">
         <div>
           <div className="flex justify-between items-center mb-2">
             <label className="text-sm font-bold text-slate-700">Prioritize Time</label>

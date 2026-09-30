@@ -4,10 +4,10 @@ export default function SearchBox() {
   const [travelMode, setTravelMode] = useState('walking');
 
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-      <h2 className="text-xl font-bold text-slate-800 mb-5">Plan Your Route</h2>
+    <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200">
+      <h2 className="text-lg sm:text-xl font-bold text-slate-800 mb-4 sm:mb-5">Plan Your Route</h2>
       
-      <div className="space-y-5">
+      <div className="space-y-4 sm:space-y-5">
         <div>
           <label className="block text-sm font-semibold text-slate-700 mb-1.5">Origin</label>
           <div className="relative group">
@@ -44,24 +44,24 @@ export default function SearchBox() {
 
         <div>
           <label className="block text-sm font-semibold text-slate-700 mb-1.5">Travel Mode</label>
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
             <button 
               onClick={() => setTravelMode('walking')}
               className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl border transition-all duration-200 ${travelMode === 'walking' ? 'bg-greenroute-50 border-greenroute-600 text-greenroute-800 ring-2 ring-greenroute-600/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:shadow-sm'}`}
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 21v-7.5a2.25 2.25 0 00-2.25-2.25h-1.5a1.5 1.5 0 01-1.5-1.5v-1.5a1.5 1.5 0 011.5-1.5h1.5a2.25 2.25 0 002.25-2.25V2.25" />
               </svg>
-              <span className="text-sm font-semibold">Walking</span>
+              <span className="text-sm font-semibold truncate">Walking</span>
             </button>
             <button 
               onClick={() => setTravelMode('cycling')}
               className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl border transition-all duration-200 ${travelMode === 'cycling' ? 'bg-greenroute-50 border-greenroute-600 text-greenroute-800 ring-2 ring-greenroute-600/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:shadow-sm'}`}
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16a2 2 0 001.996-2.047L10 13V9a2 2 0 00-2-2H6a2 2 0 00-2 2v4c0 1.053.895 1.953 1.996 2.047A2 2 0 008 16zm0 0a2 2 0 002-2H6a2 2 0 002 2zm8 0a2 2 0 001.996-2.047L18 13V9a2 2 0 00-2-2h-2a2 2 0 00-2 2v4c0 1.053.895 1.953 1.996 2.047A2 2 0 0016 16zm0 0a2 2 0 002-2h-4a2 2 0 002 2z" />
               </svg>
-              <span className="text-sm font-semibold">Cycling</span>
+              <span className="text-sm font-semibold truncate">Cycling</span>
             </button>
           </div>
         </div>
