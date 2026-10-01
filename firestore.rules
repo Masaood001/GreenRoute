@@ -1,0 +1,139 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny-all to guarantee strict security
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // HELPER FUNCTIONS
+    // ==========================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Admin authorization: Requires authentication AND verification via
+    // 1) admins collection document for the UID, or
+    // 2) admin custom claim on the auth token.
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token != null && request.auth.token.get('admin', false) == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Validates campus condition document fields and values
+    function isValidCampusCondition(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() <= 150
+        && data.type in ['blocked_path', 'construction', 'hazard', 'maintenance', 'event', 'other']
+        && data.severity in ['low', 'medium', 'high', 'critical']
+        && data.status in ['active', 'scheduled', 'resolved']
+        && data.location is map
+        && data.reportedBy is string;
+    }
+
+    // Strict validation for user preferences:
+    // Prevents unexpected fields, enforces types, valid enums, and numerical ranges
+    function isValidUserPreferences(data, userId) {
+      return data.keys().hasOnly([
+        'userId',
+        'preferredRouteType',
+        'avoidHazards',
+        'avoidStairs',
+        'wheelchairAccessible',
+        'minimumShadePreference',
+        'maxAirQualityIndex',
+        'walkingSpeed',
+        'notificationAlerts',
+        'updatedAt'
+      ])
+      && data.userId == userId
+      && data.userId == request.auth.uid
+      && data.preferredRouteType in ['quickest', 'greenest', 'shadiest', 'cleanest_air', 'balanced']
+      && data.avoidHazards is bool
+      && data.avoidStairs is bool
+      && data.wheelchairAccessible is bool
+      && data.minimumShadePreference is number
+      && data.minimumShadePreference >= 0
+      && data.minimumShadePreference <= 100
+      && data.maxAirQualityIndex is number
+      && data.maxAirQualityIndex >= 0
+      && data.maxAirQualityIndex <= 500
+      && data.walkingSpeed in ['slow', 'normal', 'fast']
+      && data.notificationAlerts is bool;
+    }
+
+    // Validates route schema, preventing owner spoofing and malformed nodes
+    function isValidRoute(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.userId is string
+        && data.userId == request.auth.uid
+        && data.origin is map && data.origin.latitude is number && data.origin.longitude is number
+        && data.destination is map && data.destination.latitude is number && data.destination.longitude is number;
+    }
+
+    // ==========================================
+    // COLLECTION RULES
+    // ==========================================
+
+    // 1. Campus Conditions (hazards, construction, closures):
+    // Public read ensures all students and faculty can access safety warnings.
+    // Writes restricted exclusively to verified administrators.
+    match /campus_conditions/{conditionId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidCampusCondition(request.resource.data);
+      allow update: if isAdmin() && isValidCampusCondition(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 2. Environmental Data (air quality, temperature, shade):
+    // Public read for campus awareness; admin-only writes for sensor feeds.
+    match /environmental_data/{dataId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 3. User Preferences:
+    // User preferences are strictly scoped to the authenticated owner.
+    // Enforces exact schema, prevented unknown fields, and valid enum values.
+    match /user_preferences/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUserPreferences(request.resource.data, userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // 4. Saved Routes:
+    // Enforces user ownership across all lifecycle operations (create, read, update, delete).
+    // On update, ownership reassignment is forbidden.
+    match /routes/{routeId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && isValidRoute(request.resource.data);
+
+      allow update: if isAuthenticated()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid
+        && isValidRoute(request.resource.data);
+
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 5. Admin Authorization Registry:
+    // Authenticated users can only read their OWN admin document to verify their status.
+    // Writing/creating admin documents is completely blocked from client SDKs.
+    // Admin documents can only be granted via Firebase Console or Firebase Admin SDK.
+    match /admins/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if false;
+    }
+  }
+}
