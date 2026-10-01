@@ -52,6 +52,17 @@ import {
   SIMULATED_CAMPUS_CONDITIONS,
   seedSimulatedCampusData,
 } from "../src/services/index.js";
+import {
+  mapFirebaseEnvToAttributes,
+  EnvironmentalAttributes,
+  createCampusGraph,
+  applyCampusConditionsToGraph,
+  getPenalizedEdgeCost,
+  findDijkstraRoute,
+} from "../src/algorithm/index.js";
+
+
+
 
 console.log("=================================================");
 console.log("GreenRoute: Running Tier 1 Local Service Unit Tests");
@@ -513,8 +524,168 @@ for (const fn of expectedFunctions) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Firebase Environmental Data Adapter Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 8] Firebase Environmental Data Adapter Tests:");
+
+it("correctly maps full Firebase environmental data record to EnvironmentalAttributes", () => {
+  const firebaseData = {
+    zoneId: "zone_quad",
+    airQuality: { aqi: 45, category: "Good" },
+    temperature: { celsius: 24.5 },
+    shade: { score: 85, level: "dense" },
+    greenery: { score: 90 },
+  };
+
+  const result = mapFirebaseEnvToAttributes(firebaseData);
+
+  assert.ok(result instanceof EnvironmentalAttributes);
+  assert.strictEqual(result.pollution, 45);
+  assert.strictEqual(result.heat, 24.5);
+  assert.strictEqual(result.shade, 0.85);
+  assert.strictEqual(result.greenery, 0.90);
+});
+
+it("safely handles null or undefined input", () => {
+  const resNull = mapFirebaseEnvToAttributes(null);
+  assert.ok(resNull instanceof EnvironmentalAttributes);
+  assert.strictEqual(resNull.pollution, 0);
+  assert.strictEqual(resNull.heat, 0);
+  assert.strictEqual(resNull.shade, 0);
+  assert.strictEqual(resNull.greenery, 0);
+
+  const resUndefined = mapFirebaseEnvToAttributes(undefined);
+  assert.ok(resUndefined instanceof EnvironmentalAttributes);
+  assert.strictEqual(resUndefined.pollution, 0);
+  assert.strictEqual(resUndefined.heat, 0);
+  assert.strictEqual(resUndefined.shade, 0);
+  assert.strictEqual(resUndefined.greenery, 0);
+});
+
+it("safely handles missing nested objects and empty input", () => {
+  const resEmpty = mapFirebaseEnvToAttributes({});
+  assert.ok(resEmpty instanceof EnvironmentalAttributes);
+  assert.strictEqual(resEmpty.pollution, 0);
+  assert.strictEqual(resEmpty.heat, 0);
+  assert.strictEqual(resEmpty.shade, 0);
+  assert.strictEqual(resEmpty.greenery, 0);
+
+  const resPartialObj = mapFirebaseEnvToAttributes({
+    airQuality: {},
+    temperature: {},
+    shade: {},
+    greenery: {},
+  });
+  assert.ok(resPartialObj instanceof EnvironmentalAttributes);
+  assert.strictEqual(resPartialObj.pollution, 0);
+  assert.strictEqual(resPartialObj.heat, 0);
+  assert.strictEqual(resPartialObj.shade, 0);
+  assert.strictEqual(resPartialObj.greenery, 0);
+});
+
+it("safely sanitizes non-numeric or edge case values", () => {
+  const resInvalid = mapFirebaseEnvToAttributes({
+    airQuality: { aqi: "invalid" },
+    temperature: { celsius: null },
+    shade: { score: undefined },
+    greenery: { score: "100" },
+  });
+  assert.ok(resInvalid instanceof EnvironmentalAttributes);
+  assert.strictEqual(resInvalid.pollution, 0);
+  assert.strictEqual(resInvalid.heat, 0);
+  assert.strictEqual(resInvalid.shade, 0);
+  assert.strictEqual(resInvalid.greenery, 1.0);
+});
+
+// ---------------------------------------------------------------------------
+// 9. Campus Conditions Adapter Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 9] Campus Conditions Adapter Tests:");
+
+it("applies blocked_path condition as Infinity penalty and isBlocked: true", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Block", type: "blocked_path", severity: "low", status: "active", affectedPathIds: ["N1-N6"] },
+  ]);
+
+  const edge = graph.getNeighbors("N1").find((e) => e.targetId === "N6");
+  assert.ok(edge);
+  assert.strictEqual(edge.isBlocked, true);
+  assert.strictEqual(edge.penaltyMultiplier, Infinity);
+});
+
+it("applies severity levels (critical, high, medium, low) correctly", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Crit", type: "hazard", severity: "critical", status: "active", affectedPathIds: ["N1-N2"] },
+    { title: "High", type: "hazard", severity: "high", status: "active", affectedPathIds: ["N2-N3"] },
+    { title: "Med", type: "construction", severity: "medium", status: "active", affectedPathIds: ["N3-N7"] },
+    { title: "Low", type: "maintenance", severity: "low", status: "active", affectedPathIds: ["N1-N5"] },
+  ]);
+
+  assert.strictEqual(graph.getNeighbors("N1").find((e) => e.targetId === "N2").isBlocked, true);
+  assert.strictEqual(graph.getNeighbors("N2").find((e) => e.targetId === "N3").penaltyMultiplier, 4.0);
+  assert.strictEqual(graph.getNeighbors("N3").find((e) => e.targetId === "N7").penaltyMultiplier, 2.0);
+  assert.strictEqual(graph.getNeighbors("N1").find((e) => e.targetId === "N5").penaltyMultiplier, 1.25);
+});
+
+it("ignores non-active conditions (scheduled and resolved)", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Sched", type: "blocked_path", severity: "critical", status: "scheduled", affectedPathIds: ["N1-N6"] },
+    { title: "Res", type: "blocked_path", severity: "critical", status: "resolved", affectedPathIds: ["N1-N6"] },
+  ]);
+
+  const edge = graph.getNeighbors("N1").find((e) => e.targetId === "N6");
+  assert.strictEqual(edge.isBlocked, false);
+  assert.strictEqual(edge.penaltyMultiplier, 1.0);
+});
+
+it("evaluates penalized edge cost correctly with getPenalizedEdgeCost", () => {
+  const normal = { distance: 100, penaltyMultiplier: 1.0, isBlocked: false };
+  const high = { distance: 100, penaltyMultiplier: 4.0, isBlocked: false };
+  const blocked = { distance: 100, penaltyMultiplier: Infinity, isBlocked: true };
+
+  assert.strictEqual(getPenalizedEdgeCost(normal), 100);
+  assert.strictEqual(getPenalizedEdgeCost(high), 400);
+  assert.strictEqual(getPenalizedEdgeCost(blocked), Infinity);
+});
+
+// ---------------------------------------------------------------------------
+// 10. Condition-Aware Routing Integration Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 10] Condition-Aware Routing Integration Tests:");
+
+it("preserves default Dijkstra behavior when no conditions option is provided", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Block", type: "blocked_path", severity: "critical", status: "active", affectedPathIds: ["N1-N6"] },
+  ]);
+
+  // Without useConditions option -> uses normal shortest distance path N1 -> N6 -> N7
+  const normalRoute = findDijkstraRoute(graph, "N1", "N7");
+  assert.ok(normalRoute);
+  assert.strictEqual(normalRoute.nodeIds.join(" -> "), "N1 -> N6 -> N7");
+});
+
+it("reroutes around blocked edges when condition-aware option is enabled", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Block", type: "blocked_path", severity: "critical", status: "active", affectedPathIds: ["N1-N6"] },
+  ]);
+
+  // With useConditions option -> avoids N1-N6 and takes N1 -> N2 -> N3 -> N7
+  const condRoute = findDijkstraRoute(graph, "N1", "N7", { useConditions: true });
+  assert.ok(condRoute);
+  assert.strictEqual(condRoute.nodeIds.includes("N6"), false);
+  assert.strictEqual(condRoute.nodeIds.join(" -> "), "N1 -> N2 -> N3 -> N7");
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+
+
 console.log("\n=================================================");
 console.log(`Results: ${testsPassed} passed, ${testsFailed} failed`);
 console.log("=================================================");

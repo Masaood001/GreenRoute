@@ -1,6 +1,8 @@
 import { Route } from './models/Route.js';
 import { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 import { rankRoutes, WEIGHT_PROFILES } from './scoring.js';
+import { getPenalizedEdgeCost } from './adapters/campusConditionsAdapter.js';
+
 
 /**
  * Priority queue helper using a simple array sorted by priority.
@@ -42,8 +44,18 @@ export function findDijkstraRoute(graph, startNodeId, targetNodeId, options = {}
     return null;
   }
 
-  // Cost evaluator function (defaults to distance optimization)
-  const getCost = options.costFn || ((edge) => edge.distance);
+  // Base cost evaluator function (defaults to distance optimization)
+  const baseCostFn = options.costFn || ((edge) => edge.distance);
+
+  // Condition-aware cost evaluator when conditions option or hazard avoidance is requested
+  const shouldPenalizeConditions = Boolean(
+    options.useConditions || options.useConditionPenalties || options.avoidHazards
+  );
+
+  const getCost = shouldPenalizeConditions
+    ? (edge) => getPenalizedEdgeCost(edge, baseCostFn)
+    : baseCostFn;
+
 
   const distances = new Map();
   const previous = new Map();
@@ -207,7 +219,7 @@ export function findCandidateRoutes(graph, startNodeId, targetNodeId, options = 
 
   // Step 1: Run Dijkstra under each multi-objective strategy
   for (const strat of strategies) {
-    const route = findDijkstraRoute(graph, startNodeId, targetNodeId, { costFn: strat.costFn });
+    const route = findDijkstraRoute(graph, startNodeId, targetNodeId, { ...options, costFn: strat.costFn });
     if (route && route.nodeIds.length > 0) {
       const key = route.nodeIds.join('->');
       if (!uniqueRoutes.has(key)) {
@@ -232,7 +244,8 @@ export function findCandidateRoutes(graph, startNodeId, targetNodeId, options = 
         return edge.distance * (isPenalized ? 10.0 : 1.0);
       };
 
-      const altRoute = findDijkstraRoute(graph, startNodeId, targetNodeId, { costFn: penaltyCostFn });
+      const altRoute = findDijkstraRoute(graph, startNodeId, targetNodeId, { ...options, costFn: penaltyCostFn });
+
       if (altRoute && altRoute.nodeIds.length > 0) {
         const key = altRoute.nodeIds.join('->');
         if (!uniqueRoutes.has(key)) {
