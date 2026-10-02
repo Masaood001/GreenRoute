@@ -14,8 +14,6 @@ export {
   computeFactorBounds,
   normalizeFactors,
 } from './scoring.js';
-export { createDemoGraph, createCandidateRoutesDemo, runDijkstraTest, runScoringTest, runCandidateRoutesTest, runCampusGraphTest } from './demo.js';
-
 export { createCampusGraph, CAMPUS_NODES, CAMPUS_EDGES, IS_SAMPLE_DATASET } from './data/campusGraph.js';
 export { mapFirebaseEnvToAttributes, applyEnvironmentalDataToGraph } from './adapters/firebaseAdapter.js';
 export { applyCampusConditionsToGraph, getPenalizedEdgeCost } from './adapters/campusConditionsAdapter.js';

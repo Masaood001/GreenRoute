@@ -370,7 +370,7 @@ export function runCampusGraphTest() {
 }
 
 // Execute tests when module is run directly via Node
-if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
+if (typeof process !== 'undefined' && Array.isArray(process.argv) && process.argv[1] && import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
   const dijkstraOk = runDijkstraTest();
   const scoringOk = runScoringTest();
   const candidateOk = runCandidateRoutesTest();

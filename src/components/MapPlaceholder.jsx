@@ -1,4 +1,4 @@
-export default function MapPlaceholder() {
+export default function MapPlaceholder({ selectedRoute }) {
   return (
     <div className="relative w-full h-full min-h-[400px] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-sm flex flex-col items-center justify-center">
       {/* Subtle grid pattern background */}
@@ -10,10 +10,21 @@ export default function MapPlaceholder() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
           </svg>
         </div>
-        <h3 className="text-xl font-extrabold text-slate-800 mb-2">Map Loading / Integration</h3>
-        <p className="text-slate-600 mb-0 leading-relaxed font-medium">
-          This container is ready to seamlessly integrate React-Leaflet or alternative map providers once the algorithm team provides real data.
-        </p>
+        <h3 className="text-xl font-extrabold text-slate-800 mb-2">Map Integration View</h3>
+        {selectedRoute ? (
+          <div className="mt-2 text-slate-700 space-y-2">
+            <div className="font-bold text-greenroute-800 text-base">{selectedRoute.name} ({selectedRoute.duration} • {selectedRoute.distance})</div>
+            {selectedRoute.nodeIds && selectedRoute.nodeIds.length > 0 && (
+              <div className="text-xs font-semibold bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 font-mono">
+                Path: {selectedRoute.nodeIds.join(' → ')}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-slate-600 mb-0 leading-relaxed font-medium">
+            This container is ready to seamlessly integrate React-Leaflet or alternative map providers once the algorithm team provides real data.
+          </p>
+        )}
       </div>
       
       {/* Mock Map Controls */}

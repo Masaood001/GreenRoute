@@ -740,9 +740,82 @@ it("propagates simulation metadata (isSimulated, source, disclaimer) to edge met
 });
 
 // ---------------------------------------------------------------------------
-// Summary
+// [Group 12] UI to Runtime Routing Integration Tests (Step 4C)
 // ---------------------------------------------------------------------------
 
+console.log("\n[Group 12] UI to Runtime Routing Integration Tests:");
+
+import { mapInputToNodeId, resolvePreferenceProfile, transformRouteToUI } from "../src/utils/routingHelpers.js";
+
+it("maps exact node IDs case-insensitively using mapInputToNodeId", () => {
+  assert.strictEqual(mapInputToNodeId("N1", "N7"), "N1");
+  assert.strictEqual(mapInputToNodeId("n1", "N7"), "N1");
+  assert.strictEqual(mapInputToNodeId("N7", "N1"), "N7");
+});
+
+it("maps exact node names case-insensitively using mapInputToNodeId", () => {
+  assert.strictEqual(mapInputToNodeId("North Gate Hub", "N7"), "N1");
+  assert.strictEqual(mapInputToNodeId("south eco innovation hub", "N1"), "N7");
+});
+
+it("maps partial node names case-insensitively (North Gate -> N1, South Eco -> N7)", () => {
+  assert.strictEqual(mapInputToNodeId("North Gate", "N7"), "N1");
+  assert.strictEqual(mapInputToNodeId("South Eco", "N1"), "N7");
+});
+
+it("safely falls back to default node ID for empty or unmatched inputs", () => {
+  assert.strictEqual(mapInputToNodeId("", "N1"), "N1");
+  assert.strictEqual(mapInputToNodeId(null, "N7"), "N7");
+  assert.strictEqual(mapInputToNodeId("Unknown Location 123", "N1"), "N1");
+});
+
+it("maps preference weights to correct runtime profiles (environment -> greenest, time -> quickest, equal -> balanced)", () => {
+  assert.strictEqual(
+    resolvePreferenceProfile({ timeWeight: 20, distanceWeight: 20, environmentWeight: 80 }),
+    "greenest"
+  );
+  assert.strictEqual(
+    resolvePreferenceProfile({ timeWeight: 90, distanceWeight: 30, environmentWeight: 30 }),
+    "quickest"
+  );
+  assert.strictEqual(
+    resolvePreferenceProfile({ timeWeight: 50, distanceWeight: 50, environmentWeight: 50 }),
+    "balanced"
+  );
+});
+
+it("transforms algorithm Route model objects into the UI route schema", () => {
+  const dummyRoute = {
+    id: "route-1",
+    name: "Eco Green Route",
+    totalTime: 420,
+    totalDistance: 750,
+    score: 88,
+    aggregatedEnvironmental: {
+      greenery: 0.85,
+      shade: 0.80,
+      pollution: 15,
+      heat: 18,
+    },
+    nodeIds: ["N1", "N2", "N3", "N7"],
+  };
+
+  const uiRoute = transformRouteToUI(dummyRoute, 0, false);
+  assert.strictEqual(uiRoute.id, "route-1");
+  assert.strictEqual(uiRoute.name, "Eco Green Route");
+  assert.strictEqual(uiRoute.category, "Greenest");
+  assert.strictEqual(uiRoute.duration, "7 min");
+  assert.strictEqual(uiRoute.distance, "0.8 km");
+  assert.strictEqual(uiRoute.environmentalScore, 88);
+  assert.strictEqual(uiRoute.greenery, 85);
+  assert.strictEqual(uiRoute.shade, 80);
+  assert.strictEqual(uiRoute.pollution, "Low");
+  assert.deepStrictEqual(uiRoute.nodeIds, ["N1", "N2", "N3", "N7"]);
+});
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
 
 console.log("\n=================================================");
 console.log(`Results: ${testsPassed} passed, ${testsFailed} failed`);
