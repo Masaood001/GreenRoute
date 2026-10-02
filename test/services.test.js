@@ -54,6 +54,7 @@ import {
 } from "../src/services/index.js";
 import {
   mapFirebaseEnvToAttributes,
+  applyEnvironmentalDataToGraph,
   EnvironmentalAttributes,
   createCampusGraph,
   applyCampusConditionsToGraph,
@@ -679,6 +680,61 @@ it("reroutes around blocked edges when condition-aware option is enabled", () =>
   assert.ok(condRoute);
   assert.strictEqual(condRoute.nodeIds.includes("N6"), false);
   assert.strictEqual(condRoute.nodeIds.join(" -> "), "N1 -> N2 -> N3 -> N7");
+});
+
+// ---------------------------------------------------------------------------
+// 11. Live Firebase Environmental Data Graph Integration Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 11] Live Firebase Environmental Data Graph Integration Tests:");
+
+it("updates campus graph edge attributes by zoneId from Firebase environmental records", () => {
+  const graph = createCampusGraph();
+  applyEnvironmentalDataToGraph(graph, [
+    {
+      zoneId: "zone_central_quad",
+      airQuality: { aqi: 150 },
+      temperature: { celsius: 24.5 },
+      shade: { score: 85 },
+      greenery: { score: 90 },
+    },
+  ]);
+
+  const edgeN1N2 = graph.getNeighbors("N1").find((e) => e.targetId === "N2");
+  assert.ok(edgeN1N2);
+  assert.strictEqual(edgeN1N2.environmentalAttributes.pollution, 150);
+  assert.strictEqual(edgeN1N2.environmentalAttributes.heat, 24.5);
+  assert.strictEqual(edgeN1N2.environmentalAttributes.shade, 0.85);
+  assert.strictEqual(edgeN1N2.environmentalAttributes.greenery, 0.90);
+});
+
+it("safely handles null/empty/unmatched records while preserving static fallbacks", () => {
+  const graph = createCampusGraph();
+  const staticN1N6Pollution = graph.getNeighbors("N1").find((e) => e.targetId === "N6").environmentalAttributes.pollution;
+
+  assert.doesNotThrow(() => applyEnvironmentalDataToGraph(graph, null));
+  assert.doesNotThrow(() => applyEnvironmentalDataToGraph(graph, [{ zoneId: "unmatched_zone" }]));
+
+  const edgeN1N6 = graph.getNeighbors("N1").find((e) => e.targetId === "N6");
+  assert.strictEqual(edgeN1N6.environmentalAttributes.pollution, staticN1N6Pollution);
+});
+
+it("propagates simulation metadata (isSimulated, source, disclaimer) to edge metadata", () => {
+  const graph = createCampusGraph();
+  applyEnvironmentalDataToGraph(graph, [
+    {
+      zoneId: "zone_sports_complex",
+      airQuality: { aqi: 40 },
+      isSimulated: true,
+      source: "BENCHMARK_SRC",
+      disclaimer: "BENCHMARK_DISCLAIMER",
+    },
+  ]);
+
+  const edgeN1N5 = graph.getNeighbors("N1").find((e) => e.targetId === "N5");
+  assert.ok(edgeN1N5);
+  assert.strictEqual(edgeN1N5.metadata.isSimulated, true);
+  assert.strictEqual(edgeN1N5.metadata.source, "BENCHMARK_SRC");
+  assert.strictEqual(edgeN1N5.metadata.disclaimer, "BENCHMARK_DISCLAIMER");
 });
 
 // ---------------------------------------------------------------------------

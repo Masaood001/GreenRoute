@@ -108,6 +108,7 @@ export const CAMPUS_EDGES = [
     time: 180,
     bidirectional: true,
     environmentalAttributes: { pollution: 45, heat: 28, greenery: 0.35, shade: 0.30 },
+    metadata: { zoneId: 'zone_hostel_avenue' },
   },
   // 2. Direct Main Corridor Segment 2: N6 -> N7
   {
@@ -117,6 +118,7 @@ export const CAMPUS_EDGES = [
     time: 190,
     bidirectional: true,
     environmentalAttributes: { pollution: 40, heat: 26, greenery: 0.40, shade: 0.35 },
+    metadata: { zoneId: 'zone_hostel_avenue' },
   },
   // 3. Eco Quad Greenway Segment 1: N1 -> N2
   {
@@ -126,6 +128,7 @@ export const CAMPUS_EDGES = [
     time: 140,
     bidirectional: true,
     environmentalAttributes: { pollution: 15, heat: 20, greenery: 0.85, shade: 0.80 },
+    metadata: { zoneId: 'zone_central_quad' },
   },
   // 4. Eco Quad Greenway Segment 2: N2 -> N3
   {
@@ -135,6 +138,7 @@ export const CAMPUS_EDGES = [
     time: 150,
     bidirectional: true,
     environmentalAttributes: { pollution: 10, heat: 18, greenery: 0.95, shade: 0.90 },
+    metadata: { zoneId: 'zone_central_quad' },
   },
   // 5. Eco Quad Greenway Segment 3: N3 -> N7
   {
@@ -144,6 +148,7 @@ export const CAMPUS_EDGES = [
     time: 160,
     bidirectional: true,
     environmentalAttributes: { pollution: 12, heat: 19, greenery: 0.90, shade: 0.85 },
+    metadata: { zoneId: 'zone_botanical_trail' },
   },
   // 6. Perimeter Expressway Bypass Segment 1: N1 -> N5
   {
@@ -153,6 +158,7 @@ export const CAMPUS_EDGES = [
     time: 90,
     bidirectional: true,
     environmentalAttributes: { pollution: 65, heat: 32, greenery: 0.20, shade: 0.15 },
+    metadata: { zoneId: 'zone_sports_complex' },
   },
   // 7. Perimeter Expressway Bypass Segment 2: N5 -> N4
   {
@@ -162,6 +168,7 @@ export const CAMPUS_EDGES = [
     time: 100,
     bidirectional: true,
     environmentalAttributes: { pollution: 60, heat: 30, greenery: 0.25, shade: 0.20 },
+    metadata: { zoneId: 'zone_science_promenade' },
   },
   // 8. Perimeter Expressway Bypass Segment 3: N4 -> N7
   {
@@ -171,6 +178,7 @@ export const CAMPUS_EDGES = [
     time: 80,
     bidirectional: true,
     environmentalAttributes: { pollution: 55, heat: 29, greenery: 0.30, shade: 0.25 },
+    metadata: { zoneId: 'zone_science_promenade' },
   },
   // 9. Quad to Student Center Connector: N2 -> N6
   {
@@ -180,6 +188,7 @@ export const CAMPUS_EDGES = [
     time: 120,
     bidirectional: true,
     environmentalAttributes: { pollution: 25, heat: 22, greenery: 0.70, shade: 0.65 },
+    metadata: { zoneId: 'zone_sports_complex' },
   },
 ];
 
@@ -207,7 +216,7 @@ export function createCampusGraph(nodesData = CAMPUS_NODES, edgesData = CAMPUS_E
   }
 
   for (const edgeData of edgesData) {
-    graph.addEdge(
+    const edge = graph.addEdge(
       edgeData.sourceId,
       edgeData.targetId,
       edgeData.distance ?? 0,
@@ -215,6 +224,17 @@ export function createCampusGraph(nodesData = CAMPUS_NODES, edgesData = CAMPUS_E
       edgeData.environmentalAttributes || {},
       edgeData.bidirectional ?? false
     );
+
+    if (edgeData.metadata) {
+      edge.metadata = { ...edgeData.metadata };
+      if (edgeData.bidirectional) {
+        const reverseNeighbors = graph.getNeighbors(edgeData.targetId);
+        const reverseEdge = reverseNeighbors.find((e) => e.targetId === edgeData.sourceId);
+        if (reverseEdge) {
+          reverseEdge.metadata = { ...edgeData.metadata };
+        }
+      }
+    }
   }
 
   return graph;
