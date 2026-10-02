@@ -75,3 +75,6 @@ export {
   SIMULATED_CAMPUS_CONDITIONS,
   seedSimulatedCampusData,
 } from "./simulatedData.js";
+
+// Live Routing Integration Orchestration
+export { calculateLiveCampusRoutes } from "./routingIntegrationService.js";

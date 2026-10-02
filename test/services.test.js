@@ -51,6 +51,7 @@ import {
   SIMULATED_CAMPUS_ZONES,
   SIMULATED_CAMPUS_CONDITIONS,
   seedSimulatedCampusData,
+  calculateLiveCampusRoutes,
 } from "../src/services/index.js";
 import {
   mapFirebaseEnvToAttributes,
@@ -516,6 +517,7 @@ const expectedFunctions = [
   deleteRoute,
   subscribeUserRoutes,
   seedSimulatedCampusData,
+  calculateLiveCampusRoutes,
 ];
 
 for (const fn of expectedFunctions) {
