@@ -4,7 +4,8 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
-  sendPasswordResetEmail,
+  sendPasswordResetEmail as firebaseSendPasswordResetEmail,
+  updatePassword,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase.js";
@@ -93,5 +94,27 @@ export async function checkCurrentUserAdmin() {
  * @returns {Promise<void>}
  */
 export async function sendPasswordReset(email) {
-  return await sendPasswordResetEmail(auth, email);
+  return await firebaseSendPasswordResetEmail(auth, email);
+}
+
+/**
+ * Alias for sendPasswordReset.
+ * @param {string} email
+ * @returns {Promise<void>}
+ */
+export async function sendPasswordResetEmail(email) {
+  return await sendPasswordReset(email);
+}
+
+/**
+ * Update the password of the currently authenticated user.
+ * @param {string} newPassword
+ * @returns {Promise<void>}
+ */
+export async function changeUserPassword(newPassword) {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error("No authenticated user found.");
+  }
+  return await updatePassword(user, newPassword);
 }

@@ -15,6 +15,8 @@ export {
   getCurrentUser,
   checkCurrentUserAdmin,
   sendPasswordReset,
+  sendPasswordResetEmail,
+  changeUserPassword,
 } from "./authService.js";
 
 // Campus Conditions Service

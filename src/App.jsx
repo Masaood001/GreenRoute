@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Header from './components/Header';
 import SearchBox from './components/SearchBox';
 import MapPlaceholder from './components/MapPlaceholder';
@@ -6,8 +6,12 @@ import RouteComparison from './components/RouteComparison';
 import PreferenceControls from './components/PreferenceControls';
 import EnvironmentalInfo from './components/EnvironmentalInfo';
 import RouteExplanation from './components/RouteExplanation';
+import AuthModal from './components/AuthModal';
+import AboutModal from './components/AboutModal';
+import ChangePasswordModal from './components/ChangePasswordModal';
+import ProfileModal from './components/ProfileModal';
 import { mockRoutes, defaultPreferences } from './mockData';
-import { calculateLiveCampusRoutes } from './services/routingIntegrationService.js';
+import { calculateLiveCampusRoutes, onAuthStateChange, signOutUser } from './services/index.js';
 import {
   mapInputToNodeId,
   resolvePreferenceProfile,
@@ -24,6 +28,31 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
+
+  // Authentication & Modals State
+  const [user, setUser] = useState(null);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange((currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      setUser(null);
+      setIsProfileOpen(false);
+      setIsChangePasswordOpen(false);
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
+  };
 
   const handleSelectRoute = (route) => {
     setSelectedRoute(route);
@@ -75,7 +104,14 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-greenroute-200 selection:text-greenroute-900">
-      <Header />
+      <Header
+        user={user}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenAbout={() => setIsAboutOpen(true)}
+        onSignOut={handleSignOut}
+        onChangePassword={() => setIsChangePasswordOpen(true)}
+        onOpenProfile={() => setIsProfileOpen(true)}
+      />
 
       <main className="flex-1 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8 flex flex-col xl:flex-row gap-8">
 
@@ -131,6 +167,28 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* Modals */}
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+      />
+
+      <AboutModal
+        isOpen={isAboutOpen}
+        onClose={() => setIsAboutOpen(false)}
+      />
+
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
+
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        user={user}
+      />
     </div>
   );
 }
