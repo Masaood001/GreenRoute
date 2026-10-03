@@ -64,6 +64,12 @@ import {
   getPenalizedEdgeCost,
   findDijkstraRoute,
 } from "../src/algorithm/index.js";
+import {
+  pankiAreaConfig,
+  REGISTERED_AREAS,
+  getAreaConfigById,
+  getDefaultAreaConfig,
+} from "../src/areas/index.js";
 
 
 
@@ -816,6 +822,85 @@ it("transforms algorithm Route model objects into the UI route schema", () => {
   assert.strictEqual(uiRoute.pollution, "Low");
   assert.deepStrictEqual(uiRoute.nodeIds, ["N1", "N2", "N3", "N7"]);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 13] Study Area Datasets & Registry Foundation Tests (Step 5B-1)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 13] Study Area Datasets & Registry Foundation Tests:");
+
+it("validates Panki study area config schema and required metadata", () => {
+  assert.strictEqual(pankiAreaConfig.id, "panki-kanpur");
+  assert.strictEqual(pankiAreaConfig.name, "Panki");
+  assert.strictEqual(pankiAreaConfig.city, "Kanpur");
+  assert.strictEqual(pankiAreaConfig.state, "Uttar Pradesh");
+  assert.strictEqual(pankiAreaConfig.country, "India");
+  assert.strictEqual(pankiAreaConfig.targetAreaKm2, 5);
+  assert.strictEqual(pankiAreaConfig.boundarySource, "project-defined-study-area");
+  assert.strictEqual(pankiAreaConfig.datasetStatus, "boundary-only");
+  assert.strictEqual(pankiAreaConfig.isOfficialBoundary, false);
+  assert.ok(pankiAreaConfig.description.includes("Project study area"));
+});
+
+it("verifies Panki center point matches reference coordinates (26.4596° N, 80.2383° E)", () => {
+  assert.strictEqual(pankiAreaConfig.center.latitude, 26.4596);
+  assert.strictEqual(pankiAreaConfig.center.longitude, 80.2383);
+});
+
+it("validates boundary.geojson is valid GeoJSON Polygon centered at reference point", () => {
+  const geojson = pankiAreaConfig.boundary;
+  assert.strictEqual(geojson.type, "FeatureCollection");
+  assert.ok(Array.isArray(geojson.features));
+  assert.strictEqual(geojson.features.length, 1);
+
+  const feature = geojson.features[0];
+  assert.strictEqual(feature.geometry.type, "Polygon");
+
+  const ring = feature.geometry.coordinates[0];
+  assert.ok(ring.length >= 5);
+  // Verify ring is closed
+  assert.deepStrictEqual(ring[0], ring[ring.length - 1]);
+
+  // Check bounding box
+  const lngs = ring.map((c) => c[0]);
+  const lats = ring.map((c) => c[1]);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+
+  const centerLng = (minLng + maxLng) / 2;
+  const centerLat = (minLat + maxLat) / 2;
+
+  assert.ok(Math.abs(centerLat - 26.4596) < 0.001);
+  assert.ok(Math.abs(centerLng - 80.2383) < 0.001);
+});
+
+it("computes approximate study area size to be ~5.0 km²", () => {
+  const ring = pankiAreaConfig.boundary.features[0].geometry.coordinates[0];
+  const lngs = ring.map((c) => c[0]);
+  const lats = ring.map((c) => c[1]);
+
+  const deltaLat = Math.max(...lats) - Math.min(...lats);
+  const deltaLng = Math.max(...lngs) - Math.min(...lngs);
+
+  // 1 degree latitude ~ 111 km
+  const heightKm = deltaLat * 111.0;
+  // 1 degree longitude at 26.46°N ~ 111 * cos(26.46°) = 99.37 km
+  const widthKm = deltaLng * (111.0 * Math.cos((26.4596 * Math.PI) / 180));
+
+  const computedAreaKm2 = heightKm * widthKm;
+  assert.ok(computedAreaKm2 >= 4.8 && computedAreaKm2 <= 5.2, `Computed area ${computedAreaKm2.toFixed(2)} km² is within expected ~5 km² range`);
+});
+
+it("verifies area registry functions (REGISTERED_AREAS, getAreaConfigById, getDefaultAreaConfig)", () => {
+  assert.ok(Array.isArray(REGISTERED_AREAS));
+  assert.strictEqual(REGISTERED_AREAS.length, 1);
+  assert.strictEqual(getAreaConfigById("panki-kanpur"), pankiAreaConfig);
+  assert.strictEqual(getAreaConfigById("nonexistent"), null);
+  assert.strictEqual(getDefaultAreaConfig(), pankiAreaConfig);
+});
+
 
 // ---------------------------------------------------------------------------
 // Summary
