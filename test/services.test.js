@@ -70,6 +70,12 @@ import {
   getAreaConfigById,
   getDefaultAreaConfig,
 } from "../src/areas/index.js";
+import { validatePankiRoadFeatures } from "../src/areas/panki/scripts/validatePankiData.js";
+import pankiRoadFeatures from "../src/areas/panki/data/raw/panki_road_features.json" with { type: 'json' };
+import { validatePankiGraph } from "../src/areas/panki/scripts/validatePankiGraph.js";
+import pankiGraph from "../src/areas/panki/data/processed/pankiGraph.json" with { type: 'json' };
+
+
 
 
 
@@ -900,6 +906,88 @@ it("verifies area registry functions (REGISTERED_AREAS, getAreaConfigById, getDe
   assert.strictEqual(getAreaConfigById("nonexistent"), null);
   assert.strictEqual(getDefaultAreaConfig(), pankiAreaConfig);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 14] Real Panki Geographic Road Dataset Validation Tests (Step 5B-2)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 14] Real Panki Geographic Road Dataset Validation Tests:");
+
+it("validates panki_road_features.json exists and contains usable road features", () => {
+  assert.ok(pankiRoadFeatures);
+  assert.strictEqual(pankiRoadFeatures.type, "FeatureCollection");
+  assert.ok(Array.isArray(pankiRoadFeatures.features));
+  assert.ok(pankiRoadFeatures.features.length >= 400, "Contains > 400 real OSM road features");
+});
+
+it("verifies all road features preserve source OSM way IDs and attribution", () => {
+  for (const feature of pankiRoadFeatures.features) {
+    assert.ok(feature.id.startsWith("osm-way-"));
+    assert.strictEqual(typeof feature.osmWayId, "number");
+    assert.ok(feature.highwayType);
+    assert.strictEqual(feature.sourceAttribution, "© OpenStreetMap contributors");
+    assert.strictEqual(feature.license, "ODbL (Open Database License)");
+  }
+});
+
+it("verifies zero fabricated data in Panki road dataset (isFabricated: false)", () => {
+  for (const feature of pankiRoadFeatures.features) {
+    assert.strictEqual(feature.isFabricated, false);
+  }
+});
+
+it("executes validatePankiRoadFeatures suite cleanly with 0 validation errors", () => {
+  const result = validatePankiRoadFeatures(pankiRoadFeatures);
+  assert.strictEqual(result.isValid, true);
+  assert.strictEqual(result.errors.length, 0);
+  assert.strictEqual(result.stats.fabricatedFeaturesCount, 0);
+  assert.ok(result.stats.totalUsableRoadFeatures >= 400);
+});
+
+// ---------------------------------------------------------------------------
+// [Group 15] Real Panki Processed Graph Validation Tests (Step 5B-3)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 15] Real Panki Processed Graph Validation Tests:");
+
+it("validates pankiGraph.json schema and metadata", () => {
+  assert.ok(pankiGraph);
+  assert.strictEqual(pankiGraph.areaId, "panki-kanpur");
+  assert.strictEqual(pankiGraph.source, "OpenStreetMap");
+  assert.strictEqual(pankiGraph.datasetStatus, "processed-graph");
+  assert.strictEqual(pankiGraph.metadata.isSampleData, false);
+});
+
+it("verifies Panki graph node and edge counts (> 700 nodes, > 2000 edges)", () => {
+  assert.ok(Array.isArray(pankiGraph.nodes));
+  assert.ok(Array.isArray(pankiGraph.edges));
+  assert.ok(pankiGraph.nodes.length >= 700, "Contains >= 700 nodes");
+  assert.ok(pankiGraph.edges.length >= 2000, "Contains >= 2000 edges");
+});
+
+it("verifies sample campus node IDs (N1-N7) do NOT exist in Panki graph", () => {
+  const sampleIds = new Set(["N1", "N2", "N3", "N4", "N5", "N6", "N7"]);
+  for (const node of pankiGraph.nodes) {
+    assert.strictEqual(sampleIds.has(node.id), false);
+  }
+});
+
+it("verifies zero fabricated data in Panki graph dataset", () => {
+  for (const edge of pankiGraph.edges) {
+    assert.strictEqual(edge.isFabricated, false);
+    assert.ok(edge.distanceMeters > 0);
+  }
+});
+
+it("executes validatePankiGraph suite cleanly with 0 validation errors", () => {
+  const result = validatePankiGraph(pankiGraph, pankiAreaConfig.boundary);
+  assert.strictEqual(result.isValid, true);
+  assert.strictEqual(result.errors.length, 0);
+  assert.strictEqual(result.stats.pointsOutsidePolygon, 0);
+  assert.strictEqual(result.stats.fabricatedEdgesCount, 0);
+});
+
+
 
 
 // ---------------------------------------------------------------------------
