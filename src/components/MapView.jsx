@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
@@ -8,16 +8,47 @@ import {
   routeToPolyline,
   getNodeCoordinate,
 } from '../areas/panki/mapDataAdapter.js';
+import { findNearestNodeInArea } from '../areas/graphAdapter.js';
 
-export default function MapView({ selectedRoute, routes = [], areaId = 'panki-kanpur' }) {
+export default function MapView({
+  selectedRoute,
+  routes = [],
+  areaId = 'panki-kanpur',
+  originLocation,
+  destinationLocation,
+  onSelectOrigin,
+  onSelectDestination,
+  onMapClickLocation,
+}) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const [clickTarget, setClickTarget] = useState('origin'); // 'origin' | 'destination'
+
   const layersRef = useRef({
     boundary: null,
     roads: null,
     routes: null,
     markers: null,
   });
+
+  // Store active callbacks in ref to avoid stale closures in Leaflet event handlers
+  const callbacksRef = useRef({
+    onSelectOrigin,
+    onSelectDestination,
+    onMapClickLocation,
+    clickTarget,
+    areaId,
+  });
+
+  useEffect(() => {
+    callbacksRef.current = {
+      onSelectOrigin,
+      onSelectDestination,
+      onMapClickLocation,
+      clickTarget,
+      areaId,
+    };
+  }, [onSelectOrigin, onSelectDestination, onMapClickLocation, clickTarget, areaId]);
 
   // Initialize Map Instance
   useEffect(() => {
@@ -67,6 +98,42 @@ export default function MapView({ selectedRoute, routes = [], areaId = 'panki-ka
     // 5. Markers Layer Group
     const markersLayer = L.layerGroup().addTo(map);
 
+    // Map Click Listener -> Resolve Nearest Real Panki Node
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      const currentArea = callbacksRef.current.areaId || 'panki-kanpur';
+      const nearest = findNearestNodeInArea(currentArea, lat, lng);
+      if (!nearest) return;
+
+      const displayLabel =
+        nearest.name && nearest.name !== nearest.id
+          ? nearest.name
+          : `Panki Node ${nearest.id.replace(/^osm-node-/, '')}`;
+
+      const locObj = {
+        id: nearest.id,
+        name: displayLabel,
+        coordinate: { latitude: nearest.latitude, longitude: nearest.longitude },
+        nodeId: nearest.id,
+        source: 'Map Click',
+        distanceMeters: nearest.distanceMeters,
+      };
+
+      const { onSelectOrigin, onSelectDestination, onMapClickLocation, clickTarget } = callbacksRef.current;
+
+      if (onMapClickLocation) {
+        onMapClickLocation(locObj, clickTarget);
+      }
+
+      if (clickTarget === 'origin') {
+        if (onSelectOrigin) onSelectOrigin(locObj);
+        setClickTarget('destination');
+      } else {
+        if (onSelectDestination) onSelectDestination(locObj);
+        setClickTarget('origin');
+      }
+    });
+
     mapRef.current = map;
     layersRef.current = {
       boundary: boundaryLayer,
@@ -81,7 +148,7 @@ export default function MapView({ selectedRoute, routes = [], areaId = 'panki-ka
     };
   }, []);
 
-  // Update Route Polylines and Markers when selectedRoute or routes change
+  // Update Route Polylines and Markers when selectedRoute, routes, or location props change
   useEffect(() => {
     const map = mapRef.current;
     const { routes: routesLayer, markers: markersLayer } = layersRef.current;
@@ -123,72 +190,112 @@ export default function MapView({ selectedRoute, routes = [], areaId = 'panki-ka
         if (bounds.isValid()) {
           map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
         }
-
-        // 3. Draw Start / Origin Marker
-        const firstNodeId = selectedRoute.nodeIds?.[0];
-        const lastNodeId = selectedRoute.nodeIds?.[selectedRoute.nodeIds.length - 1];
-
-        const startCoord = getNodeCoordinate(firstNodeId) || polylineCoords[0];
-        const endCoord = getNodeCoordinate(lastNodeId) || polylineCoords[polylineCoords.length - 1];
-
-        if (startCoord) {
-          const startIcon = L.divIcon({
-            className: 'custom-map-marker-start',
-            html: `
-              <div style="background-color: #059669; color: white; width: 28px; height: 28px; borderRadius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid white;">
-                A
-              </div>
-            `,
-            iconSize: [28, 28],
-            iconAnchor: [14, 14],
-          });
-
-          L.marker(startCoord, { icon: startIcon })
-            .bindPopup(`<b>Origin Node</b><br/>${firstNodeId || 'Start'}`)
-            .addTo(markersLayer);
-        }
-
-        if (endCoord) {
-          const endIcon = L.divIcon({
-            className: 'custom-map-marker-end',
-            html: `
-              <div style="background-color: #dc2626; color: white; width: 28px; height: 28px; borderRadius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid white;">
-                B
-              </div>
-            `,
-            iconSize: [28, 28],
-            iconAnchor: [14, 14],
-          });
-
-          L.marker(endCoord, { icon: endIcon })
-            .bindPopup(`<b>Destination Node</b><br/>${lastNodeId || 'End'}`)
-            .addTo(markersLayer);
-        }
-      } else {
-        // Fallback for sample N1-N7 campus graph routes (e.g. SF coordinates)
-        const sampleStartCoord = getNodeCoordinate(selectedRoute.nodeIds?.[0]);
-        const sampleEndCoord = getNodeCoordinate(selectedRoute.nodeIds?.[selectedRoute.nodeIds.length - 1]);
-
-        if (sampleStartCoord && sampleEndCoord) {
-          const sampleLine = L.polyline([sampleStartCoord, sampleEndCoord], {
-            color: '#10b981',
-            weight: 4,
-            opacity: 0.8,
-            dashArray: '6, 6',
-          }).addTo(routesLayer);
-
-          const sampleBounds = sampleLine.getBounds();
-          if (sampleBounds.isValid()) {
-            map.fitBounds(sampleBounds, { padding: [50, 50] });
-          }
-        }
       }
     }
-  }, [selectedRoute, routes, areaId]);
+
+    // 3. Draw Origin Marker (A)
+    let originCoord = null;
+    let originLabel = 'Origin';
+
+    if (originLocation) {
+      if (typeof originLocation === 'object' && originLocation.coordinate) {
+        originCoord = [originLocation.coordinate.latitude, originLocation.coordinate.longitude];
+        originLabel = originLocation.name || 'Origin';
+      } else if (typeof originLocation === 'string') {
+        originCoord = getNodeCoordinate(originLocation);
+        originLabel = originLocation;
+      }
+    } else if (selectedRoute?.nodeIds?.[0]) {
+      const firstNodeId = selectedRoute.nodeIds[0];
+      originCoord = getNodeCoordinate(firstNodeId);
+      originLabel = `Origin Node (${firstNodeId})`;
+    }
+
+    if (originCoord) {
+      const startIcon = L.divIcon({
+        className: 'custom-map-marker-start',
+        html: `
+          <div style="background-color: #059669; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid white;">
+            A
+          </div>
+        `,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+
+      L.marker(originCoord, { icon: startIcon })
+        .bindPopup(`<b>Origin</b><br/>${originLabel}`)
+        .addTo(markersLayer);
+    }
+
+    // 4. Draw Destination Marker (B)
+    let destCoord = null;
+    let destLabel = 'Destination';
+
+    if (destinationLocation) {
+      if (typeof destinationLocation === 'object' && destinationLocation.coordinate) {
+        destCoord = [destinationLocation.coordinate.latitude, destinationLocation.coordinate.longitude];
+        destLabel = destinationLocation.name || 'Destination';
+      } else if (typeof destinationLocation === 'string') {
+        destCoord = getNodeCoordinate(destinationLocation);
+        destLabel = destinationLocation;
+      }
+    } else if (selectedRoute?.nodeIds?.length > 0) {
+      const lastNodeId = selectedRoute.nodeIds[selectedRoute.nodeIds.length - 1];
+      destCoord = getNodeCoordinate(lastNodeId);
+      destLabel = `Destination Node (${lastNodeId})`;
+    }
+
+    if (destCoord) {
+      const endIcon = L.divIcon({
+        className: 'custom-map-marker-end',
+        html: `
+          <div style="background-color: #dc2626; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid white;">
+            B
+          </div>
+        `,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+
+      L.marker(destCoord, { icon: endIcon })
+        .bindPopup(`<b>Destination</b><br/>${destLabel}`)
+        .addTo(markersLayer);
+    }
+  }, [selectedRoute, routes, areaId, originLocation, destinationLocation]);
 
   return (
     <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-sm border border-slate-200">
-      <div ref={mapContainerRef} className="w-full h-full z-0" />
+      <div ref={mapContainerRef} className="w-full h-full z-0 cursor-crosshair" />
+
+      {/* Map Click Target Selector Banner */}
+      <div className="absolute top-3 left-3 z-[400] bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-1">
+        <span className="text-xs font-bold text-slate-600 pl-2 pr-1 hidden sm:inline">Set via Map Click:</span>
+        <button
+          type="button"
+          onClick={() => setClickTarget('origin')}
+          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+            clickTarget === 'origin'
+              ? 'bg-emerald-600 text-white shadow-sm'
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}
+        >
+          Origin (A)
+        </button>
+        <button
+          type="button"
+          onClick={() => setClickTarget('destination')}
+          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+            clickTarget === 'destination'
+              ? 'bg-red-600 text-white shadow-sm'
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}
+        >
+          Destination (B)
+        </button>
+      </div>
+
+      {/* Area Badge */}
       <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold text-slate-700 z-[400] flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
         <span>Panki Study Area (~5 km²)</span>

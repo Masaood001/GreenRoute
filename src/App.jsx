@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Header from './components/Header';
 import SearchBox from './components/SearchBox';
 import MapPlaceholder from './components/MapPlaceholder';
@@ -10,7 +10,7 @@ import AuthModal from './components/AuthModal';
 import AboutModal from './components/AboutModal';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import ProfileModal from './components/ProfileModal';
-import { mockRoutes, defaultPreferences } from './mockData';
+import { defaultPreferences } from './mockData';
 import { calculateLiveCampusRoutes, onAuthStateChange, signOutUser } from './services/index.js';
 import {
   mapInputToNodeId,
@@ -18,13 +18,20 @@ import {
   getPreferenceWeights,
   transformRouteToUI,
 } from './utils/routingHelpers.js';
+import { resolvePankiLocationToNode } from './areas/panki/locationSearch.js';
+import { resolveNodeInArea } from './areas/graphAdapter.js';
 
 function App() {
   const [preferences, setPreferences] = useState(defaultPreferences);
-  const [selectedRoute, setSelectedRoute] = useState(mockRoutes[1]);
-  const [origin, setOrigin] = useState('North Gate');
-  const [destination, setDestination] = useState('South Eco');
-  const [routes, setRoutes] = useState(mockRoutes);
+  const [selectedRoute, setSelectedRoute] = useState(null);
+  const [areaId, setAreaId] = useState('panki-kanpur');
+
+  const [origin, setOrigin] = useState('Kalpi Road');
+  const [destination, setDestination] = useState('M.I.G Road');
+  const [originLocation, setOriginLocation] = useState(null);
+  const [destinationLocation, setDestinationLocation] = useState(null);
+
+  const [routes, setRoutes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
@@ -43,38 +50,44 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  const handleSignOut = async () => {
-    try {
-      await signOutUser();
-      setUser(null);
-      setIsProfileOpen(false);
-      setIsChangePasswordOpen(false);
-    } catch (err) {
-      console.error('Sign out error:', err);
-    }
-  };
-
-  const handleSelectRoute = (route) => {
-    setSelectedRoute(route);
-  };
-
-  const handleGenerateRoutes = async (searchParams = {}) => {
+  const handleGenerateRoutes = useCallback(async (searchParams = {}) => {
     const currentOrigin = searchParams.origin ?? origin;
     const currentDest = searchParams.destination ?? destination;
 
-    if (searchParams.origin) setOrigin(searchParams.origin);
-    if (searchParams.destination) setDestination(searchParams.destination);
+    if (searchParams.originLocation) setOriginLocation(searchParams.originLocation);
+    if (searchParams.destinationLocation) setDestinationLocation(searchParams.destinationLocation);
+
+    if (typeof currentOrigin === 'string') setOrigin(currentOrigin);
+    if (typeof currentDest === 'string') setDestination(currentDest);
 
     setLoading(true);
     setError(null);
 
     try {
-      const startNodeId = mapInputToNodeId(currentOrigin, 'N1');
-      const targetNodeId = mapInputToNodeId(currentDest, 'N7');
+      // 1. Resolve Panki graph nodes first
+      let startNodeId = resolvePankiLocationToNode(currentOrigin) || resolveNodeInArea('panki-kanpur', currentOrigin);
+      let targetNodeId = resolvePankiLocationToNode(currentDest) || resolveNodeInArea('panki-kanpur', currentDest);
+
+      // 2. Sample Campus N1-N7 fallback check
+      let targetAreaId = 'panki-kanpur';
+      if (!startNodeId || !targetNodeId) {
+        startNodeId = mapInputToNodeId(typeof currentOrigin === 'string' ? currentOrigin : currentOrigin?.name, 'N1');
+        targetNodeId = mapInputToNodeId(typeof currentDest === 'string' ? currentDest : currentDest?.name, 'N7');
+        if (startNodeId.startsWith('N') && targetNodeId.startsWith('N')) {
+          targetAreaId = 'sample-campus';
+        } else {
+          startNodeId = startNodeId || 'osm-node-8820570755';
+          targetNodeId = targetNodeId || 'osm-node-3156228563';
+        }
+      }
+
+      setAreaId(targetAreaId);
+
       const preferenceProfile = resolvePreferenceProfile(preferences);
       const weights = getPreferenceWeights(preferences, preferenceProfile);
 
       const rawRoutes = await calculateLiveCampusRoutes({
+        areaId: targetAreaId,
         startNodeId,
         targetNodeId,
         preference: preferenceProfile,
@@ -95,12 +108,67 @@ function App() {
         setSelectedRoute(null);
       }
     } catch (err) {
-      console.error('Error generating live campus routes:', err);
-      setError(err.message || 'Failed to calculate campus routes. Please try again.');
+      console.error('Error generating live routes:', err);
+      setError(err.message || 'Failed to calculate routes. Please try again.');
     } finally {
       setLoading(false);
     }
+  }, [origin, destination, preferences]);
+
+  // Initial Route Generation on Load for Panki Study Area
+  useEffect(() => {
+    let isMounted = true;
+    async function loadInitialRoutes() {
+      const startNodeId = resolvePankiLocationToNode('Kalpi Road');
+      const targetNodeId = resolvePankiLocationToNode('M.I.G Road');
+      const rawRoutes = await calculateLiveCampusRoutes({
+        areaId: 'panki-kanpur',
+        startNodeId,
+        targetNodeId,
+        preference: 'balanced',
+      });
+      if (isMounted && rawRoutes && rawRoutes.length > 0) {
+        const formattedRoutes = rawRoutes.map((r, index) =>
+          transformRouteToUI(r, index, Boolean(rawRoutes?.isFallback))
+        );
+        setRoutes(formattedRoutes);
+        setSelectedRoute(formattedRoutes[0]);
+      }
+    }
+    loadInitialRoutes();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+
+
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      setUser(null);
+      setIsProfileOpen(false);
+      setIsChangePasswordOpen(false);
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
   };
+
+  const handleSelectRoute = (route) => {
+    setSelectedRoute(route);
+  };
+
+  const handleSelectOrigin = (loc) => {
+    setOriginLocation(loc);
+    setOrigin(loc.name || loc.nodeId || loc);
+  };
+
+  const handleSelectDestination = (loc) => {
+    setDestinationLocation(loc);
+    setDestination(loc.name || loc.nodeId || loc);
+  };
+
+
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-greenroute-200 selection:text-greenroute-900">
@@ -118,8 +186,10 @@ function App() {
         {/* Left Sidebar - Search and Preferences */}
         <div className="w-full xl:w-[380px] flex flex-col shrink-0 gap-6">
           <SearchBox
-            origin={origin}
-            destination={destination}
+            origin={originLocation || origin}
+            destination={destinationLocation || destination}
+            onSelectOrigin={handleSelectOrigin}
+            onSelectDestination={handleSelectDestination}
             onSearch={handleGenerateRoutes}
             loading={loading}
           />
@@ -145,7 +215,15 @@ function App() {
         {/* Center/Main Area - Map and Details */}
         <div className="flex-1 flex flex-col min-w-0 gap-8">
           <div className="h-[450px] lg:h-[550px] w-full shrink-0">
-            <MapPlaceholder selectedRoute={selectedRoute} routes={routes} areaId="panki-kanpur" />
+            <MapPlaceholder
+              selectedRoute={selectedRoute}
+              routes={routes}
+              areaId={areaId}
+              originLocation={originLocation}
+              destinationLocation={destinationLocation}
+              onSelectOrigin={handleSelectOrigin}
+              onSelectDestination={handleSelectDestination}
+            />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">

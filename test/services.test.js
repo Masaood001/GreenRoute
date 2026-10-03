@@ -86,6 +86,14 @@ import {
   routeToPolyline,
   getNodeCoordinate,
 } from "../src/areas/panki/mapDataAdapter.js";
+import {
+  searchPankiLocations,
+  getPankiLocationSuggestions,
+  getPankiLocationById,
+  resolvePankiLocationToNode,
+  getAvailablePankiNamedLocations,
+} from "../src/areas/panki/locationSearch.js";
+
 
 
 
@@ -1237,6 +1245,142 @@ it("gracefully handles route with no nodeIds or unknown nodeIds", () => {
   assert.deepStrictEqual(routeToPolyline({ nodeIds: [] }), []);
   assert.deepStrictEqual(routeToPolyline({ nodeIds: ["bad-1", "bad-2"] }, pankiGraph), []);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 19] Real Panki Location Search & Map Selection Tests (Step 5B-7)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 19] Real Panki Location Search & Map Selection Tests:");
+
+it("returns only real source-supported named locations from getAvailablePankiNamedLocations", () => {
+  const locations = getAvailablePankiNamedLocations();
+  assert.ok(Array.isArray(locations));
+  assert.ok(locations.length > 0);
+  for (const loc of locations) {
+    assert.strictEqual(loc.isFabricated, false);
+    assert.strictEqual(loc.source, "OpenStreetMap");
+    assert.ok(loc.name);
+    assert.ok(loc.nodeId);
+  }
+});
+
+it("performs case-insensitive and partial search for real Panki names", () => {
+  const kalpiResults = searchPankiLocations("kalpi");
+  assert.ok(kalpiResults.length > 0);
+  assert.ok(kalpiResults.some((r) => r.name.toLowerCase().includes("kalpi")));
+
+  const migResults = searchPankiLocations("M.I.G");
+  assert.ok(migResults.length > 0);
+  assert.ok(migResults.some((r) => r.name.includes("M.I.G")));
+
+  const bypassResults = searchPankiLocations("bypass");
+  assert.ok(bypassResults.length > 0);
+  assert.ok(bypassResults.some((r) => r.name.toLowerCase().includes("bypass")));
+});
+
+it("supports node ID search (e.g. 8820570755 or osm-node-8820570755)", () => {
+  const byOsmId = searchPankiLocations("8820570755");
+  assert.strictEqual(byOsmId.length, 1);
+  assert.strictEqual(byOsmId[0].nodeId, "osm-node-8820570755");
+
+  const byFullId = searchPankiLocations("osm-node-8820570755");
+  assert.strictEqual(byFullId.length, 1);
+  assert.strictEqual(byFullId[0].nodeId, "osm-node-8820570755");
+});
+
+it("supports coordinate string search and resolves nearest Panki graph node", () => {
+  const coordResults = searchPankiLocations("26.4596, 80.2383");
+  assert.strictEqual(coordResults.length, 1);
+  assert.strictEqual(coordResults[0].source, "Coordinates");
+  assert.ok(coordResults[0].nodeId.startsWith("osm-node-"));
+});
+
+it("returns empty array for unknown search query without fabricating place names", () => {
+  const emptyQuery = searchPankiLocations("");
+  assert.deepStrictEqual(emptyQuery, []);
+
+  const unknownQuery = searchPankiLocations("Nonexistent Fake Landmark 12345");
+  assert.deepStrictEqual(unknownQuery, []);
+});
+
+it("provides autocomplete suggestions via getPankiLocationSuggestions", () => {
+  const defaultSuggestions = getPankiLocationSuggestions("");
+  assert.ok(defaultSuggestions.length >= 4);
+  const names = defaultSuggestions.map((s) => s.name);
+  assert.ok(names.includes("Kalpi Road"));
+  assert.ok(names.includes("M.I.G Road"));
+
+  const filtered = getPankiLocationSuggestions("Flyover");
+  assert.ok(filtered.length > 0);
+  assert.ok(filtered.every((s) => s.name.toLowerCase().includes("flyover")));
+});
+
+it("retrieves location by ID via getPankiLocationById", () => {
+  const byWay = getPankiLocationById("osm-way-22834406");
+  assert.ok(byWay);
+  assert.strictEqual(byWay.name, "Kalpi Road");
+
+  const byNode = getPankiLocationById("osm-node-8820570755");
+  assert.ok(byNode);
+  assert.strictEqual(byNode.nodeId, "osm-node-8820570755");
+
+  assert.strictEqual(getPankiLocationById("nonexistent-id-999"), null);
+});
+
+it("resolves Panki location names, coordinate objects, and node IDs via resolvePankiLocationToNode", () => {
+  // Name string
+  const kalpiNode = resolvePankiLocationToNode("Kalpi Road");
+  assert.ok(kalpiNode);
+  assert.ok(kalpiNode.startsWith("osm-node-"));
+
+  // Coordinate object
+  const coordNode = resolvePankiLocationToNode({ latitude: 26.4596, longitude: 80.2383 });
+  assert.ok(coordNode);
+  assert.ok(coordNode.startsWith("osm-node-"));
+
+  // Node ID string
+  const directNode = resolvePankiLocationToNode("osm-node-8820570755");
+  assert.strictEqual(directNode, "osm-node-8820570755");
+
+  // Invalid input -> null
+  assert.strictEqual(resolvePankiLocationToNode(null), null);
+  assert.strictEqual(resolvePankiLocationToNode("Fake Place XYZ"), null);
+});
+
+it("calculates live route between resolved Panki search locations", async () => {
+  const startNodeId = resolvePankiLocationToNode("Kalpi Road");
+  const targetNodeId = resolvePankiLocationToNode("M.I.G Road");
+
+  assert.ok(startNodeId);
+  assert.ok(targetNodeId);
+
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "balanced",
+  });
+
+  assert.ok(Array.isArray(routes));
+  assert.ok(routes.length > 0);
+  assert.strictEqual(routes.areaId, "panki-kanpur");
+  assert.ok(routes[0].totalDistance > 0);
+  assert.ok(routes[0].nodeIds.includes(startNodeId));
+});
+
+it("preserves 100% sample N1 -> N7 campus routing regression", async () => {
+  const sampleRoutes = await calculateLiveCampusRoutes({
+    startNodeId: "N1",
+    targetNodeId: "N7",
+    preference: "greenest",
+  });
+
+  assert.ok(Array.isArray(sampleRoutes));
+  assert.ok(sampleRoutes.length > 0);
+  assert.ok(sampleRoutes[0].nodeIds.includes("N1"));
+  assert.ok(sampleRoutes[0].nodeIds.includes("N7"));
+});
+
 
 
 
