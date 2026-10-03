@@ -4,6 +4,7 @@ import {
   findCandidateRoutes,
 } from "../algorithm/index.js";
 import { getGraphForArea, resolveNodeInArea } from "../areas/graphAdapter.js";
+import { PANKI_SIMULATED_ENV_RECORDS } from "../areas/panki/zones/pankiSimulatedEnvData.js";
 import { getAllCurrentEnvironmentalData } from "./environmentalDataService.js";
 import { getCampusConditions } from "./campusConditionsService.js";
 
@@ -78,9 +79,27 @@ export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg
     activeConditions = [];
   }
 
-  // 4. Apply environmental data to graph (if applicable)
+  // 4. Apply environmental data and active conditions to graph
   if (areaId === "sample-campus") {
     applyEnvironmentalDataToGraph(graph, envRecords);
+    applyCampusConditionsToGraph(graph, activeConditions);
+  } else if (areaId === "panki-kanpur") {
+    // Combine Firebase environmental records with Panki simulated benchmark records
+    // Live Firebase records override simulated benchmark records if zoneId matches
+    const pankiEnvMap = new Map();
+    for (const record of PANKI_SIMULATED_ENV_RECORDS) {
+      if (record && record.zoneId) {
+        pankiEnvMap.set(String(record.zoneId), record);
+      }
+    }
+    for (const record of envRecords) {
+      if (record && record.zoneId) {
+        pankiEnvMap.set(String(record.zoneId), record);
+      }
+    }
+    const combinedPankiEnvRecords = Array.from(pankiEnvMap.values());
+
+    applyEnvironmentalDataToGraph(graph, combinedPankiEnvRecords);
     applyCampusConditionsToGraph(graph, activeConditions);
   }
 

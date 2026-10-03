@@ -1,0 +1,183 @@
+/**
+ * Panki Study Area Environmental Zone Registry & Config
+ *
+ * NOTE: These polygons are project-defined environmental/routing study zones for GreenRoute
+ * multi-objective route scoring in Panki, Kanpur, UP, India. They are NOT official government
+ * administrative or pollution monitoring boundaries.
+ */
+
+export const pankiZonesGeoJSON = {
+  type: 'FeatureCollection',
+  name: 'PankiEnvironmentalZones',
+  crs: {
+    type: 'name',
+    properties: {
+      name: 'urn:ogc:def:crs:OGC:1.3:CRS84',
+    },
+  },
+  features: [
+    {
+      type: 'Feature',
+      properties: {
+        zoneId: 'PZ-01',
+        name: 'Panki Station & Transit Corridor',
+        category: 'Transit Corridor',
+        description:
+          'Central-west transit hub around Panki Dham Railway Station with high pedestrian flow and moderate vehicular activity.',
+        areaId: 'panki-kanpur',
+        enabled: true,
+        isOfficialBoundary: false,
+        source: 'Project-Defined Study Zone',
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [80.2270, 26.4550],
+            [80.2383, 26.4550],
+            [80.2383, 26.4697],
+            [80.2270, 26.4697],
+            [80.2270, 26.4550],
+          ],
+        ],
+      },
+    },
+    {
+      type: 'Feature',
+      properties: {
+        zoneId: 'PZ-02',
+        name: 'Panki Northern Industrial & Freight Hub',
+        category: 'Industrial & Logistics',
+        description:
+          'Northern sector containing industrial units, warehouse logistics, and primary arterial roads.',
+        areaId: 'panki-kanpur',
+        enabled: true,
+        isOfficialBoundary: false,
+        source: 'Project-Defined Study Zone',
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [80.2383, 26.4596],
+            [80.2496, 26.4596],
+            [80.2496, 26.4697],
+            [80.2383, 26.4697],
+            [80.2383, 26.4596],
+          ],
+        ],
+      },
+    },
+    {
+      type: 'Feature',
+      properties: {
+        zoneId: 'PZ-03',
+        name: 'Panki Residential & Eco Promenade',
+        category: 'Residential & Eco',
+        description:
+          'South-eastern residential neighborhood with pocket green space corridors and lower traffic emissions.',
+        areaId: 'panki-kanpur',
+        enabled: true,
+        isOfficialBoundary: false,
+        source: 'Project-Defined Study Zone',
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [80.2383, 26.4495],
+            [80.2496, 26.4495],
+            [80.2496, 26.4596],
+            [80.2383, 26.4596],
+            [80.2383, 26.4495],
+          ],
+        ],
+      },
+    },
+    {
+      type: 'Feature',
+      properties: {
+        zoneId: 'PZ-04',
+        name: 'Panki Suburb & Canal Greenway',
+        category: 'Suburban & Canal Promenade',
+        description:
+          'South-western sector featuring open green canopy buffers, canal pathways, and suburban access roads.',
+        areaId: 'panki-kanpur',
+        enabled: true,
+        isOfficialBoundary: false,
+        source: 'Project-Defined Study Zone',
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [80.2270, 26.4495],
+            [80.2383, 26.4495],
+            [80.2383, 26.4550],
+            [80.2270, 26.4550],
+            [80.2270, 26.4495],
+          ],
+        ],
+      },
+    },
+  ],
+};
+
+export const PANKI_ENVIRONMENTAL_ZONES = [
+  {
+    zoneId: 'PZ-01',
+    name: 'Panki Station & Transit Corridor',
+    category: 'Transit Corridor',
+    description: 'Central-west transit hub around Panki Dham Railway Station with high pedestrian flow.',
+    areaId: 'panki-kanpur',
+    enabled: true,
+    isOfficialBoundary: false,
+    source: 'Project-Defined Study Zone',
+  },
+  {
+    zoneId: 'PZ-02',
+    name: 'Panki Northern Industrial & Freight Hub',
+    category: 'Industrial & Logistics',
+    description: 'Northern sector containing industrial units, warehouse logistics, and arterial roads.',
+    areaId: 'panki-kanpur',
+    enabled: true,
+    isOfficialBoundary: false,
+    source: 'Project-Defined Study Zone',
+  },
+  {
+    zoneId: 'PZ-03',
+    name: 'Panki Residential & Eco Promenade',
+    category: 'Residential & Eco',
+    description: 'South-eastern residential neighborhood with pocket green space corridors.',
+    areaId: 'panki-kanpur',
+    enabled: true,
+    isOfficialBoundary: false,
+    source: 'Project-Defined Study Zone',
+  },
+  {
+    zoneId: 'PZ-04',
+    name: 'Panki Suburb & Canal Greenway',
+    category: 'Suburban & Canal Promenade',
+    description: 'South-western sector featuring open green canopy buffers and canal pathways.',
+    areaId: 'panki-kanpur',
+    enabled: true,
+    isOfficialBoundary: false,
+    source: 'Project-Defined Study Zone',
+  },
+];
+
+export function getPankiZoneById(zoneId) {
+  if (!zoneId) return null;
+  return PANKI_ENVIRONMENTAL_ZONES.find((z) => z.zoneId === zoneId) || null;
+}
+
+export function getAllPankiZones() {
+  return PANKI_ENVIRONMENTAL_ZONES;
+}
+
+export default {
+  PANKI_ENVIRONMENTAL_ZONES,
+  pankiZonesGeoJSON,
+  getPankiZoneById,
+  getAllPankiZones,
+};

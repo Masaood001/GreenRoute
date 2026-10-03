@@ -75,6 +75,12 @@ import pankiRoadFeatures from "../src/areas/panki/data/raw/panki_road_features.j
 import { validatePankiGraph } from "../src/areas/panki/scripts/validatePankiGraph.js";
 import pankiGraph from "../src/areas/panki/data/processed/pankiGraph.json" with { type: 'json' };
 import { getGraphForArea, findNearestNodeInArea, resolveNodeInArea } from "../src/areas/graphAdapter.js";
+import { validatePankiZones } from "../src/areas/panki/scripts/validatePankiZones.js";
+import { pankiZonesGeoJSON } from "../src/areas/panki/zones/zoneConfig.js";
+import { PANKI_SIMULATED_ENV_RECORDS } from "../src/areas/panki/zones/pankiSimulatedEnvData.js";
+import { mapEdgeToZone, mapPankiGraphEdgesToZones } from "../src/areas/panki/zoneMapper.js";
+
+
 
 
 
@@ -1070,6 +1076,100 @@ it("preserves 100% backward compatibility for sample N1 -> N7 campus routing", a
   assert.ok(bestRoute.nodeIds.includes("N7"));
   assert.ok(bestRoute.totalDistance > 0);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 17] Panki Environmental Zones & Firebase Graph Integration (Step 5B-5)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 17] Panki Environmental Zones & Firebase Graph Integration Tests:");
+
+it("validates Panki environmental zones GeoJSON schema and 4 zone polygons", () => {
+  assert.ok(pankiZonesGeoJSON);
+  assert.strictEqual(pankiZonesGeoJSON.type, "FeatureCollection");
+  assert.strictEqual(pankiZonesGeoJSON.features.length, 4);
+
+  const zoneIds = pankiZonesGeoJSON.features.map((f) => f.properties.zoneId);
+  assert.deepStrictEqual(zoneIds, ["PZ-01", "PZ-02", "PZ-03", "PZ-04"]);
+});
+
+it("verifies 100% of Panki graph edges are mapped to a valid zone ID", () => {
+  const validZoneIds = new Set(["PZ-01", "PZ-02", "PZ-03", "PZ-04"]);
+  for (const edge of pankiGraph.edges) {
+    assert.ok(edge.zoneId, `Edge ${edge.id} has zoneId`);
+    assert.ok(validZoneIds.has(edge.zoneId), `Edge ${edge.id} zoneId "${edge.zoneId}" is valid`);
+  }
+});
+
+it("executes validatePankiZones suite cleanly with 0 validation errors", () => {
+  const result = validatePankiZones(pankiZonesGeoJSON, pankiGraph, pankiAreaConfig.boundary);
+  assert.strictEqual(result.isValid, true);
+  assert.strictEqual(result.errors.length, 0);
+  assert.strictEqual(result.stats.unmappedEdgesCount, 0);
+  assert.strictEqual(result.stats.fabricatedRecordsCount, 0);
+  assert.strictEqual(result.stats.zonePointsOutsideBoundary, 0);
+});
+
+it("verifies Panki environmental records preserve isSimulated: true, source, and disclaimer metadata", () => {
+  assert.strictEqual(PANKI_SIMULATED_ENV_RECORDS.length, 4);
+  for (const record of PANKI_SIMULATED_ENV_RECORDS) {
+    assert.strictEqual(record.isSimulated, true);
+    assert.ok(record.source.includes("Panki Study Area"));
+    assert.ok(record.disclaimer.includes("Simulated environmental telemetry"));
+  }
+});
+
+it("calculates environmental-aware routes on Panki graph with mapped zone attributes", async () => {
+  const pankiNodes = pankiGraph.nodes;
+  const startNodeId = pankiNodes[0].id;
+  const targetNodeId = pankiNodes[10].id;
+
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "greenest",
+  });
+
+  assert.ok(Array.isArray(routes));
+  assert.strictEqual(routes.areaId, "panki-kanpur");
+  if (routes.length > 0) {
+    const ecoRoute = routes[0];
+    assert.ok(ecoRoute.totalDistance > 0);
+    assert.ok(typeof ecoRoute.score === "number");
+  }
+});
+
+it("leaves unmatched edge as null zoneId with empty zoneIds array (no arbitrary fallback)", () => {
+  const outOfZoneEdge = {
+    id: "edge-outside-all-zones",
+    coordinates: [[0, 0], [0.001, 0.001]],
+  };
+  const mapped = mapEdgeToZone(outOfZoneEdge, pankiZonesGeoJSON);
+  assert.strictEqual(mapped.zoneId, null);
+  assert.deepStrictEqual(mapped.metadata.zoneIds, []);
+  assert.strictEqual(mapped.metadata.isMultiZone, false);
+});
+
+it("includes matched midpoint zone in zoneIds array", () => {
+  const pankiEdge = pankiGraph.edges[0];
+  const mapped = mapEdgeToZone(pankiEdge, pankiZonesGeoJSON);
+  assert.ok(mapped.zoneId);
+  assert.ok(mapped.metadata.zoneIds.includes(mapped.zoneId));
+});
+
+it("correctly counts unmapped edges in mapPankiGraphEdgesToZones", () => {
+  const testDataset = {
+    edges: [
+      { id: "e1", coordinates: [[80.23, 26.46], [80.231, 26.461]] },
+      { id: "e2", coordinates: [[0, 0], [0.001, 0.001]] },
+    ],
+  };
+  const processed = mapPankiGraphEdgesToZones(testDataset, pankiZonesGeoJSON);
+  assert.strictEqual(processed.metadata.unmappedEdgesCount, 1);
+  assert.strictEqual(processed.metadata.totalEdgesMapped, 1);
+});
+
+
 
 
 

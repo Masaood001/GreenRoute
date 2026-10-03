@@ -49,10 +49,10 @@ export function loadPankiGraphInstance() {
     // Estimate walking time in seconds (average walking speed = 1.39 m/s)
     const timeSec = Math.max(1, Math.round(edgeData.distanceMeters / 1.39));
 
-    // Default neutral environmental values for real road segments until Step 5B-5 live env mapping
+    // Default neutral environmental values for real road segments until env records applied
     const envAttrs = {
-      pollution: 20,
-      heat: 25,
+      pollution: 0,
+      heat: 0,
       greenery: 0.50,
       shade: 0.50,
     };
@@ -66,12 +66,18 @@ export function loadPankiGraphInstance() {
       false // Panki graph already contains explicit directed edges for bidirectional roads
     );
 
+    const edgeZoneId = edgeData.zoneId || edgeData.metadata?.zoneId || null;
+    const edgeZoneIds = edgeData.metadata?.zoneIds || (edgeZoneId ? [edgeZoneId] : []);
+
+    edge.zoneId = edgeZoneId;
     edge.metadata = {
       osmWayId: edgeData.osmWayId,
       highwayType: edgeData.highwayType,
       name: edgeData.name || null,
       oneWay: Boolean(edgeData.oneWay),
       coordinates: edgeData.coordinates,
+      zoneId: edgeZoneId,
+      zoneIds: edgeZoneIds,
       isSampleData: false,
     };
   }
