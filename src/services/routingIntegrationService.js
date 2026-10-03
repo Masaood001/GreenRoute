@@ -1,29 +1,22 @@
 import {
-  createCampusGraph,
   applyEnvironmentalDataToGraph,
   applyCampusConditionsToGraph,
   findCandidateRoutes,
 } from "../algorithm/index.js";
+import { getGraphForArea, resolveNodeInArea } from "../areas/graphAdapter.js";
 import { getAllCurrentEnvironmentalData } from "./environmentalDataService.js";
 import { getCampusConditions } from "./campusConditionsService.js";
 
 /**
- * Runtime orchestration service to calculate live campus routes by connecting
- * Firebase environmental data and active campus conditions to the campus graph algorithm.
+ * Runtime orchestration service to calculate live routes by connecting
+ * Firebase environmental data and active area conditions to the area graph algorithm.
  *
- * Execution Order:
- * 1. createCampusGraph() - Baseline campus graph
- * 2. getAllCurrentEnvironmentalData() - Fetch Firebase environmental data
- * 3. getCampusConditions({ status: 'active' }) - Fetch active campus conditions
- * 4. applyEnvironmentalDataToGraph(graph, envRecords) - Apply env attributes
- * 5. applyCampusConditionsToGraph(graph, activeConditions) - Apply dynamic penalties & blocks
- * 6. findCandidateRoutes(graph, startNodeId, targetNodeId, options) - Generate candidate routes
- * 7. Route ranking performed by findCandidateRoutes via rankRoutes
- * 8. Return resulting ranked candidate routes
+ * Supports multi-area resolution (e.g. 'panki-kanpur' or 'sample-campus').
  *
  * @param {Object|string} params - Parameter object or startNodeId string
- * @param {string} [params.startNodeId] - Origin campus node ID (e.g. 'N1')
- * @param {string} [params.targetNodeId] - Destination campus node ID (e.g. 'N7')
+ * @param {string} [params.areaId='sample-campus'] - Area identifier ('panki-kanpur' | 'sample-campus')
+ * @param {string|Object} [params.startNodeId] - Origin node ID or lat/lng coordinates object
+ * @param {string|Object} [params.targetNodeId] - Destination node ID or lat/lng coordinates object
  * @param {string} [params.preference='balanced'] - Route preference profile ('balanced' | 'time' | 'environment')
  * @param {Object} [params.options={}] - Additional routing options (e.g. maxRoutes, weights, avoidHazards)
  * @param {string} [secondArg] - Target node ID if called positionally
@@ -32,25 +25,32 @@ import { getCampusConditions } from "./campusConditionsService.js";
  * @returns {Promise<Array<import('../algorithm/models/Route.js').Route>>} Ranked array of candidate routes
  */
 export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg, fourthArg) {
-  let startNodeId;
-  let targetNodeId;
+  let areaId;
+  let startNodeInput;
+  let targetNodeInput;
   let preference;
   let options;
 
   if (typeof params === "object" && params !== null) {
-    startNodeId = params.startNodeId;
-    targetNodeId = params.targetNodeId;
+    areaId = params.areaId ?? params.options?.areaId ?? "sample-campus";
+    startNodeInput = params.startNodeId;
+    targetNodeInput = params.targetNodeId;
     preference = params.preference ?? "balanced";
     options = params.options ?? {};
   } else {
-    startNodeId = params;
-    targetNodeId = secondArg;
+    areaId = fourthArg?.areaId ?? "sample-campus";
+    startNodeInput = params;
+    targetNodeInput = secondArg;
     preference = thirdArg ?? "balanced";
     options = fourthArg ?? {};
   }
 
-  // 1. Create baseline campus graph
-  const graph = createCampusGraph();
+  // 1. Resolve area graph
+  const graph = getGraphForArea(areaId);
+
+  // Resolve start and target node IDs for the area
+  const startNodeId = resolveNodeInArea(areaId, startNodeInput) ?? startNodeInput;
+  const targetNodeId = resolveNodeInArea(areaId, targetNodeInput) ?? targetNodeInput;
 
   // 2. Fetch environmental data safely
   let envRecords = [];
@@ -78,13 +78,13 @@ export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg
     activeConditions = [];
   }
 
-  // 4. Apply environmental data to graph
-  applyEnvironmentalDataToGraph(graph, envRecords);
+  // 4. Apply environmental data to graph (if applicable)
+  if (areaId === "sample-campus") {
+    applyEnvironmentalDataToGraph(graph, envRecords);
+    applyCampusConditionsToGraph(graph, activeConditions);
+  }
 
-  // 5. Apply campus conditions to graph
-  applyCampusConditionsToGraph(graph, activeConditions);
-
-  // 6 & 7. Calculate candidate routes (ranking is automatically performed by findCandidateRoutes)
+  // 5. Calculate candidate routes (ranking is automatically performed by findCandidateRoutes)
   const routeOptions = {
     preference,
     ...options,
@@ -97,7 +97,8 @@ export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg
   routes.isFallback = isFallback;
   routes.envFailed = envFailed;
   routes.conditionsFailed = conditionsFailed;
+  routes.areaId = areaId;
 
-  // 8. Return resulting ranked candidate routes
+  // 6. Return resulting ranked candidate routes
   return routes;
 }

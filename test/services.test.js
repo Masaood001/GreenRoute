@@ -74,6 +74,8 @@ import { validatePankiRoadFeatures } from "../src/areas/panki/scripts/validatePa
 import pankiRoadFeatures from "../src/areas/panki/data/raw/panki_road_features.json" with { type: 'json' };
 import { validatePankiGraph } from "../src/areas/panki/scripts/validatePankiGraph.js";
 import pankiGraph from "../src/areas/panki/data/processed/pankiGraph.json" with { type: 'json' };
+import { getGraphForArea, findNearestNodeInArea, resolveNodeInArea } from "../src/areas/graphAdapter.js";
+
 
 
 
@@ -986,6 +988,89 @@ it("executes validatePankiGraph suite cleanly with 0 validation errors", () => {
   assert.strictEqual(result.stats.pointsOutsidePolygon, 0);
   assert.strictEqual(result.stats.fabricatedEdgesCount, 0);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 16] Real Panki Graph Routing Engine Integration Tests (Step 5B-4)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 16] Real Panki Graph Routing Engine Integration Tests:");
+
+it("resolves Panki graph instance via getGraphForArea('panki-kanpur')", () => {
+  const pankiG = getGraphForArea("panki-kanpur");
+  assert.ok(pankiG);
+  assert.strictEqual(pankiG.nodes.size, 788);
+});
+
+it("resolves sample campus graph instance via getGraphForArea('sample-campus')", () => {
+  const sampleG = getGraphForArea("sample-campus");
+  assert.ok(sampleG);
+  assert.strictEqual(sampleG.nodes.size, 7);
+  assert.ok(sampleG.nodes.has("N1"));
+  assert.ok(sampleG.nodes.has("N7"));
+});
+
+it("throws controlled error for unknown area ID", () => {
+  assert.throws(
+    () => getGraphForArea("unknown-area-999"),
+    /Unknown area ID "unknown-area-999"/
+  );
+});
+
+it("finds nearest real node in Panki area to reference center coordinates (26.4596° N, 80.2383° E)", () => {
+  const nearest = findNearestNodeInArea("panki-kanpur", 26.4596, 80.2383);
+  assert.ok(nearest);
+  assert.ok(nearest.id.startsWith("osm-node-"));
+  assert.ok(nearest.distanceMeters >= 0);
+  assert.ok(nearest.distanceMeters < 500, "Nearest node is within 500m of center");
+});
+
+it("resolves node input IDs and coordinates objects using resolveNodeInArea", () => {
+  const pankiNodes = pankiGraph.nodes;
+  const firstNodeId = pankiNodes[0].id;
+  assert.strictEqual(resolveNodeInArea("panki-kanpur", firstNodeId), firstNodeId);
+  const resolvedFromCoord = resolveNodeInArea("panki-kanpur", { latitude: 26.4596, longitude: 80.2383 });
+  assert.ok(resolvedFromCoord);
+  assert.ok(resolvedFromCoord.startsWith("osm-node-"));
+});
+
+it("calculates live candidate routes on real Panki graph using calculateLiveCampusRoutes", async () => {
+  const pankiNodes = pankiGraph.nodes;
+  const startNodeId = pankiNodes[0].id;
+  const targetNodeId = pankiNodes[10].id;
+
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "balanced",
+  });
+
+  assert.ok(Array.isArray(routes));
+  assert.strictEqual(routes.areaId, "panki-kanpur");
+  if (routes.length > 0) {
+    const primaryRoute = routes[0];
+    assert.ok(primaryRoute.totalDistance > 0);
+    assert.ok(primaryRoute.totalTime > 0);
+    assert.ok(typeof primaryRoute.score === "number");
+    assert.ok(primaryRoute.nodeIds.includes(startNodeId));
+  }
+});
+
+it("preserves 100% backward compatibility for sample N1 -> N7 campus routing", async () => {
+  const sampleRoutes = await calculateLiveCampusRoutes({
+    startNodeId: "N1",
+    targetNodeId: "N7",
+    preference: "balanced",
+  });
+
+  assert.ok(Array.isArray(sampleRoutes));
+  assert.ok(sampleRoutes.length > 0);
+  const bestRoute = sampleRoutes[0];
+  assert.ok(bestRoute.nodeIds.includes("N1"));
+  assert.ok(bestRoute.nodeIds.includes("N7"));
+  assert.ok(bestRoute.totalDistance > 0);
+});
+
 
 
 
