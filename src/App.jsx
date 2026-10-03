@@ -145,7 +145,7 @@ function App() {
         {/* Center/Main Area - Map and Details */}
         <div className="flex-1 flex flex-col min-w-0 gap-8">
           <div className="h-[450px] lg:h-[550px] w-full shrink-0">
-            <MapPlaceholder selectedRoute={selectedRoute} />
+            <MapPlaceholder selectedRoute={selectedRoute} routes={routes} areaId="panki-kanpur" />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">

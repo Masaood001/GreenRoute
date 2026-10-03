@@ -79,6 +79,14 @@ import { validatePankiZones } from "../src/areas/panki/scripts/validatePankiZone
 import { pankiZonesGeoJSON } from "../src/areas/panki/zones/zoneConfig.js";
 import { PANKI_SIMULATED_ENV_RECORDS } from "../src/areas/panki/zones/pankiSimulatedEnvData.js";
 import { mapEdgeToZone, mapPankiGraphEdgesToZones } from "../src/areas/panki/zoneMapper.js";
+import {
+  getPankiBoundary,
+  getPankiCenter,
+  getPankiRoadFeatures,
+  routeToPolyline,
+  getNodeCoordinate,
+} from "../src/areas/panki/mapDataAdapter.js";
+
 
 
 
@@ -1168,6 +1176,68 @@ it("correctly counts unmapped edges in mapPankiGraphEdgesToZones", () => {
   assert.strictEqual(processed.metadata.unmappedEdgesCount, 1);
   assert.strictEqual(processed.metadata.totalEdgesMapped, 1);
 });
+
+// ---------------------------------------------------------------------------
+// [Group 18] Map Data Adapter & Geometry Resolution Tests (Step 5B-6)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 18] Map Data Adapter & Geometry Resolution Tests:");
+
+it("returns valid GeoJSON FeatureCollection from getPankiBoundary", () => {
+  const boundary = getPankiBoundary();
+  assert.ok(boundary);
+  assert.strictEqual(boundary.type, "FeatureCollection");
+  assert.ok(Array.isArray(boundary.features));
+  assert.strictEqual(boundary.features.length, 1);
+});
+
+it("returns valid center point from getPankiCenter", () => {
+  const center = getPankiCenter();
+  assert.strictEqual(center.latitude, 26.4596);
+  assert.strictEqual(center.longitude, 80.2383);
+});
+
+it("loads Panki road features with Leaflet-compatible [lat, lng] coordinates", () => {
+  const roads = getPankiRoadFeatures();
+  assert.ok(Array.isArray(roads));
+  assert.ok(roads.length > 0);
+  // Leaflet coords: [latitude (~26.4), longitude (~80.2)]
+  const firstCoord = roads[0].coordinates[0];
+  assert.ok(firstCoord[0] > 20 && firstCoord[0] < 30, "First element is latitude");
+  assert.ok(firstCoord[1] > 70 && firstCoord[1] < 90, "Second element is longitude");
+});
+
+it("resolves node coordinate by node ID from Panki graph", () => {
+  const firstNode = pankiGraph.nodes[0];
+  const coord = getNodeCoordinate(firstNode.id, pankiGraph);
+  assert.ok(coord);
+  assert.strictEqual(coord[0], firstNode.latitude);
+  assert.strictEqual(coord[1], firstNode.longitude);
+});
+
+it("gracefully returns null for unknown node ID", () => {
+  assert.strictEqual(getNodeCoordinate("unknown-node-9999", pankiGraph), null);
+});
+
+it("converts a route with Panki node IDs into Leaflet polyline coordinates", () => {
+  const node1 = pankiGraph.nodes[0];
+  const node2 = pankiGraph.nodes[1];
+  const route = {
+    nodeIds: [node1.id, node2.id],
+  };
+
+  const polyline = routeToPolyline(route, pankiGraph);
+  assert.ok(Array.isArray(polyline));
+  assert.ok(polyline.length >= 2);
+  assert.deepStrictEqual(polyline[0], [node1.latitude, node1.longitude]);
+});
+
+it("gracefully handles route with no nodeIds or unknown nodeIds", () => {
+  assert.deepStrictEqual(routeToPolyline(null), []);
+  assert.deepStrictEqual(routeToPolyline({ nodeIds: [] }), []);
+  assert.deepStrictEqual(routeToPolyline({ nodeIds: ["bad-1", "bad-2"] }, pankiGraph), []);
+});
+
 
 
 
