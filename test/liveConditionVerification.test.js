@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
-import { getFirestore, doc, getDoc, collection, deleteDoc, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { getFirestore, getDoc, collection, deleteDoc, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -126,7 +126,7 @@ async function verifyLiveFlow() {
       try {
         await testUser.delete();
         console.log("  ✓ Deleted temporary test user account.");
-      } catch (e) {
+      } catch {
         console.log("  Cleaned up auth.");
       }
     }
