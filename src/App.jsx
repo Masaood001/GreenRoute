@@ -10,8 +10,15 @@ import AuthModal from './components/AuthModal';
 import AboutModal from './components/AboutModal';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import ProfileModal from './components/ProfileModal';
+import ReportConditionModal from './components/ReportConditionModal';
 import { defaultPreferences } from './mockData';
-import { calculateLiveCampusRoutes, onAuthStateChange, signOutUser } from './services/index.js';
+import {
+  calculateLiveCampusRoutes,
+  onAuthStateChange,
+  signOutUser,
+  subscribeCampusConditions,
+  resolveCampusCondition,
+} from './services/index.js';
 import {
   mapInputToNodeId,
   resolvePreferenceProfile,
@@ -32,6 +39,7 @@ function App() {
   const [destinationLocation, setDestinationLocation] = useState(null);
 
   const [routes, setRoutes] = useState([]);
+  const [activeConditions, setActiveConditions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
@@ -42,6 +50,8 @@ function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportLocation, setReportLocation] = useState(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChange((currentUser) => {
@@ -49,6 +59,55 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Real-time active conditions subscription
+  useEffect(() => {
+    const unsubscribe = subscribeCampusConditions(
+      (fetchedConditions) => {
+        setActiveConditions(fetchedConditions || []);
+      },
+      { status: 'active' }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      setUser(null);
+      setIsProfileOpen(false);
+      setIsChangePasswordOpen(false);
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
+  };
+
+  const handleSelectRoute = (route) => {
+    setSelectedRoute(route);
+  };
+
+  const handleSelectOrigin = (loc) => {
+    setOriginLocation(loc);
+    setOrigin(loc.name || loc.nodeId || loc);
+  };
+
+  const handleSelectDestination = (loc) => {
+    setDestinationLocation(loc);
+    setDestination(loc.name || loc.nodeId || loc);
+  };
+
+  const handleOpenReportModal = (loc) => {
+    setReportLocation(loc || originLocation);
+    setIsReportModalOpen(true);
+  };
+
+  const handleResolveCondition = async (conditionId) => {
+    try {
+      await resolveCampusCondition(conditionId);
+    } catch (err) {
+      console.error('Error resolving condition:', err);
+    }
+  };
 
   const handleGenerateRoutes = useCallback(async (searchParams = {}) => {
     const currentOrigin = searchParams.origin ?? origin;
@@ -115,60 +174,18 @@ function App() {
     }
   }, [origin, destination, preferences]);
 
-  // Initial Route Generation on Load for Panki Study Area
+  // Re-calculate routes when active conditions update
   useEffect(() => {
     let isMounted = true;
-    async function loadInitialRoutes() {
-      const startNodeId = resolvePankiLocationToNode('Kalpi Road');
-      const targetNodeId = resolvePankiLocationToNode('M.I.G Road');
-      const rawRoutes = await calculateLiveCampusRoutes({
-        areaId: 'panki-kanpur',
-        startNodeId,
-        targetNodeId,
-        preference: 'balanced',
-      });
-      if (isMounted && rawRoutes && rawRoutes.length > 0) {
-        const formattedRoutes = rawRoutes.map((r, index) =>
-          transformRouteToUI(r, index, Boolean(rawRoutes?.isFallback))
-        );
-        setRoutes(formattedRoutes);
-        setSelectedRoute(formattedRoutes[0]);
+    queueMicrotask(() => {
+      if (isMounted) {
+        handleGenerateRoutes();
       }
-    }
-    loadInitialRoutes();
+    });
     return () => {
       isMounted = false;
     };
-  }, []);
-
-
-
-  const handleSignOut = async () => {
-    try {
-      await signOutUser();
-      setUser(null);
-      setIsProfileOpen(false);
-      setIsChangePasswordOpen(false);
-    } catch (err) {
-      console.error('Sign out error:', err);
-    }
-  };
-
-  const handleSelectRoute = (route) => {
-    setSelectedRoute(route);
-  };
-
-  const handleSelectOrigin = (loc) => {
-    setOriginLocation(loc);
-    setOrigin(loc.name || loc.nodeId || loc);
-  };
-
-  const handleSelectDestination = (loc) => {
-    setDestinationLocation(loc);
-    setDestination(loc.name || loc.nodeId || loc);
-  };
-
-
+  }, [activeConditions, handleGenerateRoutes]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-greenroute-200 selection:text-greenroute-900">
@@ -221,8 +238,11 @@ function App() {
               areaId={areaId}
               originLocation={originLocation}
               destinationLocation={destinationLocation}
+              activeConditions={activeConditions}
               onSelectOrigin={handleSelectOrigin}
               onSelectDestination={handleSelectDestination}
+              onResolveCondition={handleResolveCondition}
+              onOpenReportModal={handleOpenReportModal}
             />
           </div>
 
@@ -266,6 +286,16 @@ function App() {
         isOpen={isProfileOpen}
         onClose={() => setIsProfileOpen(false)}
         user={user}
+      />
+
+      <ReportConditionModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        location={reportLocation}
+        user={user}
+        onConditionReported={() => {
+          handleGenerateRoutes();
+        }}
       />
     </div>
   );

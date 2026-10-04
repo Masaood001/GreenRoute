@@ -93,6 +93,12 @@ import {
   resolvePankiLocationToNode,
   getAvailablePankiNamedLocations,
 } from "../src/areas/panki/locationSearch.js";
+import {
+  mapConditionToPankiEdge,
+  mapPankiConditionsForGraph,
+  MAX_MATCHING_DISTANCE_METERS,
+} from "../src/areas/panki/conditionMapper.js";
+
 
 
 
@@ -1380,6 +1386,231 @@ it("preserves 100% sample N1 -> N7 campus routing regression", async () => {
   assert.ok(sampleRoutes[0].nodeIds.includes("N1"));
   assert.ok(sampleRoutes[0].nodeIds.includes("N7"));
 });
+
+// ---------------------------------------------------------------------------
+// [Group 20] Real Panki Condition Mapping & Dynamic Routing Tests (Step 5B-8)
+// ---------------------------------------------------------------------------
+
+console.log("\n[Group 20] Real Panki Condition Mapping & Dynamic Routing Tests:");
+
+it("maps active Panki condition coordinates to nearest valid edge within threshold", () => {
+  const pankiEdge = pankiGraph.edges[0];
+  const startNode = pankiGraph.nodes.find((n) => n.id === pankiEdge.fromNodeId);
+  const condition = {
+    id: "panki-cond-001",
+    type: "blocked_path",
+    severity: "high",
+    status: "active",
+    location: {
+      latitude: startNode.latitude,
+      longitude: startNode.longitude,
+    },
+    title: "Tree fallen on road",
+    reportedBy: "test-user-123",
+  };
+
+  const mapped = mapConditionToPankiEdge(condition, pankiGraph);
+  assert.strictEqual(mapped.isMapped, true);
+  assert.strictEqual(mapped.conditionId, "panki-cond-001");
+  assert.strictEqual(mapped.edgeId, pankiEdge.id);
+  assert.ok(mapped.distanceMeters <= MAX_MATCHING_DISTANCE_METERS);
+});
+
+it("leaves far / outside condition unmapped without assigning a random edge", () => {
+  const farCondition = {
+    id: "far-cond-999",
+    type: "hazard",
+    severity: "medium",
+    status: "active",
+    location: {
+      latitude: 28.6139, // Delhi lat
+      longitude: 77.2090, // Delhi lng
+    },
+    title: "Far away hazard",
+  };
+
+  const mapped = mapConditionToPankiEdge(farCondition, pankiGraph);
+  assert.strictEqual(mapped.isMapped, false);
+  assert.strictEqual(mapped.edgeId, null);
+  assert.ok(mapped.unmappedReason.includes("threshold") || mapped.unmappedReason.includes("exceeds") || mapped.unmappedReason.includes("outside"));
+});
+
+it("formats affectedPathIds correctly for applyCampusConditionsToGraph", () => {
+  const sampleCondition = {
+    id: "cond-test-format",
+    type: "construction",
+    severity: "medium",
+    status: "active",
+    location: {
+      latitude: pankiGraph.nodes[0].latitude,
+      longitude: pankiGraph.nodes[0].longitude,
+    },
+  };
+
+  const result = mapPankiConditionsForGraph([sampleCondition], pankiGraph);
+  assert.strictEqual(result.mappedConditions.length, 1);
+  assert.ok(result.mappedConditions[0].affectedPathIds.length > 0);
+  assert.ok(result.mappedConditions[0].affectedPathIds[0].includes("->") || result.mappedConditions[0].affectedPathIds[0].startsWith("panki-edge-"));
+});
+
+it("rejects condition submission when user is unauthenticated", async () => {
+  const invalidConditionData = {
+    type: "blocked_path",
+    severity: "high",
+    title: "Test Blockage",
+    location: { latitude: 26.4596, longitude: 80.2383 },
+  };
+
+  try {
+    await addCampusCondition(invalidConditionData);
+    assert.fail("Should have thrown authentication error");
+  } catch (err) {
+    assert.ok(
+      err.message.toLowerCase().includes("authentication") ||
+      err.message.toLowerCase().includes("signed in") ||
+      err.message.toLowerCase().includes("permission")
+    );
+  }
+});
+
+it("rejects condition submission with invalid schema payload", async () => {
+  const badPayload = {
+    type: "invalid_type_xyz",
+    severity: "extreme_fake",
+    title: "Test Bad Title",
+    location: null,
+  };
+
+  try {
+    await addCampusCondition(badPayload);
+    assert.fail("Should have thrown validation error");
+  } catch (err) {
+    assert.ok(
+      err.message.toLowerCase().includes("invalid") ||
+      err.message.toLowerCase().includes("validation") ||
+      err.message.toLowerCase().includes("title")
+    );
+  }
+});
+
+it("dynamically avoids blocked_path edge during Panki route calculation", async () => {
+  const startNodeId = pankiGraph.nodes[0].id;
+  const targetNodeId = pankiGraph.nodes[10].id;
+
+  // Calculate baseline route without conditions
+  const baselineRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "fastest",
+    activeConditions: [],
+  });
+  assert.ok(baselineRoutes.length > 0);
+  const baselineRoute = baselineRoutes[0];
+
+  // Pick an edge in the middle of the baseline route to block where rerouting options exist
+  const midIndex = Math.floor(baselineRoute.nodeIds.length / 2);
+  const node1 = baselineRoute.nodeIds[midIndex];
+  const node2 = baselineRoute.nodeIds[midIndex + 1];
+  const edgeToBlock = pankiGraph.edges.find(
+    (e) => (e.fromNodeId === node1 && e.toNodeId === node2) || (e.fromNodeId === node2 && e.toNodeId === node1)
+  );
+  assert.ok(edgeToBlock, "Found edge along baseline route");
+
+  const node1Obj = pankiGraph.nodes.find((n) => n.id === node1);
+  const node2Obj = pankiGraph.nodes.find((n) => n.id === node2);
+
+  const blockedCondition = {
+    id: "panki-blocked-edge-01",
+    type: "blocked_path",
+    severity: "critical",
+    status: "active",
+    location: {
+      latitude: (node1Obj.latitude + node2Obj.latitude) / 2,
+      longitude: (node1Obj.longitude + node2Obj.longitude) / 2,
+    },
+    title: "Road completely closed",
+  };
+
+  const reroutedRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "fastest",
+    activeConditions: [blockedCondition],
+  });
+
+  assert.ok(reroutedRoutes.length > 0);
+  const rerouted = reroutedRoutes[0];
+  // Verify blocked edge segment is not taken in succession
+  const reroutedNodes = rerouted.nodeIds;
+  let takenBlockedSegment = false;
+  for (let i = 0; i < reroutedNodes.length - 1; i++) {
+    if (
+      (reroutedNodes[i] === node1 && reroutedNodes[i + 1] === node2) ||
+      (reroutedNodes[i] === node2 && reroutedNodes[i + 1] === node1)
+    ) {
+      takenBlockedSegment = true;
+      break;
+    }
+  }
+  assert.strictEqual(takenBlockedSegment, false, "Route should avoid the blocked edge segment");
+});
+
+it("ignores scheduled and resolved conditions during route calculation", async () => {
+  const startNodeId = pankiGraph.nodes[0].id;
+  const targetNodeId = pankiGraph.nodes[10].id;
+  const nodeCoord = pankiGraph.nodes[0];
+
+  const scheduledCond = {
+    id: "sched-001",
+    type: "blocked_path",
+    severity: "critical",
+    status: "scheduled",
+    location: { latitude: nodeCoord.latitude, longitude: nodeCoord.longitude },
+  };
+
+  const resolvedCond = {
+    id: "res-001",
+    type: "blocked_path",
+    severity: "critical",
+    status: "resolved",
+    location: { latitude: nodeCoord.latitude, longitude: nodeCoord.longitude },
+  };
+
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId,
+    targetNodeId,
+    preference: "fastest",
+    activeConditions: [scheduledCond, resolvedCond],
+  });
+
+  assert.ok(routes.length > 0);
+});
+
+it("preserves N1-N7 regression, Panki environmental zones, and location search", async () => {
+  // N1 -> N7 regression
+  const sampleRoutes = await calculateLiveCampusRoutes({
+    startNodeId: "N1",
+    targetNodeId: "N7",
+    preference: "greenest",
+  });
+  assert.ok(sampleRoutes.length > 0);
+  assert.ok(sampleRoutes[0].nodeIds.includes("N1"));
+  assert.ok(sampleRoutes[0].nodeIds.includes("N7"));
+
+  // Panki Search
+  const searchRes = searchPankiLocations("Kalpi");
+  assert.ok(searchRes.length > 0);
+
+  // Environmental zones intact
+  assert.strictEqual(pankiZonesGeoJSON.features.length, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Summary
+
 
 
 

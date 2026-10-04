@@ -69,8 +69,10 @@ export function loadPankiGraphInstance() {
     const edgeZoneId = edgeData.zoneId || edgeData.metadata?.zoneId || null;
     const edgeZoneIds = edgeData.metadata?.zoneIds || (edgeZoneId ? [edgeZoneId] : []);
 
+    edge.id = edgeData.id;
     edge.zoneId = edgeZoneId;
     edge.metadata = {
+      id: edgeData.id,
       osmWayId: edgeData.osmWayId,
       highwayType: edgeData.highwayType,
       name: edgeData.name || null,
@@ -82,7 +84,6 @@ export function loadPankiGraphInstance() {
     };
   }
 
-  cachedPankiGraphInstance = graph;
   return graph;
 }
 

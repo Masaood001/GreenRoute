@@ -49,7 +49,11 @@ export function findDijkstraRoute(graph, startNodeId, targetNodeId, options = {}
 
   // Condition-aware cost evaluator when conditions option or hazard avoidance is requested
   const shouldPenalizeConditions = Boolean(
-    options.useConditions || options.useConditionPenalties || options.avoidHazards
+    options.useConditions ||
+      options.useConditionPenalties ||
+      options.avoidHazards ||
+      (options.conditions && options.conditions.length > 0) ||
+      (options.activeConditions && options.activeConditions.length > 0)
   );
 
   const getCost = shouldPenalizeConditions

@@ -9,6 +9,7 @@ import {
   getNodeCoordinate,
 } from '../areas/panki/mapDataAdapter.js';
 import { findNearestNodeInArea } from '../areas/graphAdapter.js';
+import { mapPankiConditionsForGraph } from '../areas/panki/conditionMapper.js';
 
 export default function MapView({
   selectedRoute,
@@ -16,19 +17,24 @@ export default function MapView({
   areaId = 'panki-kanpur',
   originLocation,
   destinationLocation,
+  activeConditions = [],
   onSelectOrigin,
   onSelectDestination,
   onMapClickLocation,
+  onResolveCondition,
+  onOpenReportModal,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const [clickTarget, setClickTarget] = useState('origin'); // 'origin' | 'destination'
+  const [lastClickedLoc, setLastClickedLoc] = useState(null);
 
   const layersRef = useRef({
     boundary: null,
     roads: null,
     routes: null,
     markers: null,
+    conditions: null,
   });
 
   // Store active callbacks in ref to avoid stale closures in Leaflet event handlers
@@ -36,6 +42,7 @@ export default function MapView({
     onSelectOrigin,
     onSelectDestination,
     onMapClickLocation,
+    onResolveCondition,
     clickTarget,
     areaId,
   });
@@ -45,10 +52,26 @@ export default function MapView({
       onSelectOrigin,
       onSelectDestination,
       onMapClickLocation,
+      onResolveCondition,
       clickTarget,
       areaId,
     };
-  }, [onSelectOrigin, onSelectDestination, onMapClickLocation, clickTarget, areaId]);
+  }, [onSelectOrigin, onSelectDestination, onMapClickLocation, onResolveCondition, clickTarget, areaId]);
+
+  // Global popup button click handler for resolving conditions
+  useEffect(() => {
+    const handleGlobalClick = (e) => {
+      const btn = e.target.closest('.resolve-cond-btn');
+      if (btn) {
+        const condId = btn.getAttribute('data-cond-id');
+        if (condId && callbacksRef.current.onResolveCondition) {
+          callbacksRef.current.onResolveCondition(condId);
+        }
+      }
+    };
+    document.addEventListener('click', handleGlobalClick);
+    return () => document.removeEventListener('click', handleGlobalClick);
+  }, []);
 
   // Initialize Map Instance
   useEffect(() => {
@@ -98,6 +121,9 @@ export default function MapView({
     // 5. Markers Layer Group
     const markersLayer = L.layerGroup().addTo(map);
 
+    // 6. Conditions Layer Group
+    const conditionsLayer = L.layerGroup().addTo(map);
+
     // Map Click Listener -> Resolve Nearest Real Panki Node
     map.on('click', (e) => {
       const { lat, lng } = e.latlng;
@@ -118,6 +144,8 @@ export default function MapView({
         source: 'Map Click',
         distanceMeters: nearest.distanceMeters,
       };
+
+      setLastClickedLoc(locObj);
 
       const { onSelectOrigin, onSelectDestination, onMapClickLocation, clickTarget } = callbacksRef.current;
 
@@ -140,6 +168,7 @@ export default function MapView({
       roads: roadsLayer,
       routes: routesLayer,
       markers: markersLayer,
+      conditions: conditionsLayer,
     };
 
     return () => {
@@ -148,14 +177,15 @@ export default function MapView({
     };
   }, []);
 
-  // Update Route Polylines and Markers when selectedRoute, routes, or location props change
+  // Update Route Polylines, Origin/Dest Markers, and Active Conditions
   useEffect(() => {
     const map = mapRef.current;
-    const { routes: routesLayer, markers: markersLayer } = layersRef.current;
-    if (!map || !routesLayer || !markersLayer) return;
+    const { routes: routesLayer, markers: markersLayer, conditions: conditionsLayer } = layersRef.current;
+    if (!map || !routesLayer || !markersLayer || !conditionsLayer) return;
 
     routesLayer.clearLayers();
     markersLayer.clearLayers();
+    conditionsLayer.clearLayers();
 
     // 1. Draw Alternative Candidate Routes
     if (Array.isArray(routes)) {
@@ -262,15 +292,88 @@ export default function MapView({
         .bindPopup(`<b>Destination</b><br/>${destLabel}`)
         .addTo(markersLayer);
     }
-  }, [selectedRoute, routes, areaId, originLocation, destinationLocation]);
+
+    // 5. Draw Active Panki Condition Overlays & Markers
+    if (Array.isArray(activeConditions) && activeConditions.length > 0) {
+      const { mappedConditions } = mapPankiConditionsForGraph(activeConditions);
+
+      for (const cond of mappedConditions) {
+        const cLat = cond.location?.latitude ?? cond.location?.lat;
+        const cLng = cond.location?.longitude ?? cond.location?.lng;
+        if (typeof cLat !== 'number' || typeof cLng !== 'number') continue;
+
+        let iconBg = '#d97706'; // default amber/hazard
+        let iconSymbol = '⚠️';
+        const cType = String(cond.type || '').toLowerCase();
+        const cSeverity = String(cond.severity || '').toLowerCase();
+
+        if (cType === 'blocked_path') {
+          iconBg = '#dc2626';
+          iconSymbol = '⛔';
+        } else if (cType === 'construction') {
+          iconBg = '#ea580c';
+          iconSymbol = '🚧';
+        } else if (cType === 'maintenance') {
+          iconBg = '#0284c7';
+          iconSymbol = '🔧';
+        } else if (cType === 'event') {
+          iconBg = '#9333ea';
+          iconSymbol = '🚩';
+        }
+
+        const condIcon = L.divIcon({
+          className: 'custom-map-condition-marker',
+          html: `
+            <div style="background-color: ${iconBg}; color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; box-shadow: 0 3px 8px rgba(0,0,0,0.4); border: 2px solid white;">
+              ${iconSymbol}
+            </div>
+          `,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
+        });
+
+        const popupHtml = `
+          <div style="font-family: sans-serif; min-width: 180px; padding: 2px;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <span style="background-color: ${iconBg}; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 10px; text-transform: uppercase;">
+                ${cType.replace('_', ' ')}
+              </span>
+              <span style="font-size: 10px; font-weight: bold; color: #64748b; text-transform: uppercase;">
+                ${cSeverity}
+              </span>
+            </div>
+            <div style="font-weight: bold; font-size: 13px; color: #0f172a; margin-bottom: 4px;">
+              ${cond.title || 'Road Condition'}
+            </div>
+            ${cond.description ? `<div style="font-size: 11px; color: #334155; margin-bottom: 6px;">${cond.description}</div>` : ''}
+            <div style="font-size: 10px; color: #64748b; font-family: monospace; margin-bottom: 8px;">
+              Status: ${cond.status || 'active'} • ${cond.mappedEdgeId ? `Edge: ${cond.mappedEdgeId}` : 'Mapped'}
+            </div>
+            <button
+              type="button"
+              class="resolve-cond-btn"
+              data-cond-id="${cond.id}"
+              style="width: 100%; background-color: #0f172a; color: white; border: none; padding: 6px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer;"
+            >
+              Resolve Condition
+            </button>
+          </div>
+        `;
+
+        L.marker([cLat, cLng], { icon: condIcon })
+          .bindPopup(popupHtml)
+          .addTo(conditionsLayer);
+      }
+    }
+  }, [selectedRoute, routes, areaId, originLocation, destinationLocation, activeConditions]);
 
   return (
     <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-sm border border-slate-200">
       <div ref={mapContainerRef} className="w-full h-full z-0 cursor-crosshair" />
 
-      {/* Map Click Target Selector Banner */}
-      <div className="absolute top-3 left-3 z-[400] bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-1">
-        <span className="text-xs font-bold text-slate-600 pl-2 pr-1 hidden sm:inline">Set via Map Click:</span>
+      {/* Map Click Target Selector & Report Banner */}
+      <div className="absolute top-3 left-3 z-[400] bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-1.5 flex-wrap max-w-[calc(100%-140px)] sm:max-w-none">
+        <span className="text-xs font-bold text-slate-600 pl-2 pr-1 hidden sm:inline">Map Click:</span>
         <button
           type="button"
           onClick={() => setClickTarget('origin')}
@@ -293,6 +396,16 @@ export default function MapView({
         >
           Destination (B)
         </button>
+        {onOpenReportModal && (
+          <button
+            type="button"
+            onClick={() => onOpenReportModal(lastClickedLoc || originLocation)}
+            className="px-3 py-1 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-sm flex items-center gap-1"
+          >
+            <span>⚠️</span>
+            <span>Report Condition</span>
+          </button>
+        )}
       </div>
 
       {/* Area Badge */}
