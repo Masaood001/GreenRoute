@@ -17,3 +17,9 @@ export {
 export { createCampusGraph, CAMPUS_NODES, CAMPUS_EDGES, IS_SAMPLE_DATASET } from './data/campusGraph.js';
 export { mapFirebaseEnvToAttributes, applyEnvironmentalDataToGraph } from './adapters/firebaseAdapter.js';
 export { applyCampusConditionsToGraph, getPenalizedEdgeCost } from './adapters/campusConditionsAdapter.js';
+export {
+  TRAVEL_MODE_SPEEDS,
+  DEFAULT_TRAVEL_MODE,
+  getSpeedForTravelMode,
+  calculateDurationSeconds,
+} from './travelSpeed.js';

@@ -4,6 +4,7 @@ import {
   findCandidateRoutes,
 } from "../algorithm/index.js";
 import { getGraphForArea, resolveNodeInArea } from "../areas/graphAdapter.js";
+import { resolvePankiLocationToNode } from "../areas/panki/locationSearch.js";
 import { PANKI_SIMULATED_ENV_RECORDS } from "../areas/panki/zones/pankiSimulatedEnvData.js";
 import { mapPankiConditionsForGraph } from "../areas/panki/conditionMapper.js";
 import { getAllCurrentEnvironmentalData } from "./environmentalDataService.js";
@@ -57,8 +58,8 @@ export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg
   const graph = getGraphForArea(areaId);
 
   // Resolve start and target node IDs for the area
-  const startNodeId = resolveNodeInArea(areaId, startNodeInput) ?? startNodeInput;
-  const targetNodeId = resolveNodeInArea(areaId, targetNodeInput) ?? targetNodeInput;
+  const startNodeId = resolvePankiLocationToNode(startNodeInput) || resolveNodeInArea(areaId, startNodeInput) || startNodeInput;
+  const targetNodeId = resolvePankiLocationToNode(targetNodeInput) || resolveNodeInArea(areaId, targetNodeInput) || targetNodeInput;
 
   // 2. Fetch environmental data safely
   let envRecords = [];
@@ -121,6 +122,7 @@ export async function calculateLiveCampusRoutes(params = {}, secondArg, thirdArg
     preference,
     useConditions: activeConditions.length > 0,
     activeConditions,
+    travelMode: params.travelMode || options.travelMode || "walking",
     ...options,
   };
 

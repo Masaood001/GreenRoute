@@ -33,11 +33,12 @@ function App() {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [areaId, setAreaId] = useState('panki-kanpur');
 
-  const [origin, setOrigin] = useState('Kalpi Road');
-  const [destination, setDestination] = useState('M.I.G Road');
+  const [origin, setOrigin] = useState('');
+  const [destination, setDestination] = useState('');
   const [originLocation, setOriginLocation] = useState(null);
   const [destinationLocation, setDestinationLocation] = useState(null);
 
+  const [travelMode, setTravelMode] = useState('walking');
   const [routes, setRoutes] = useState([]);
   const [activeConditions, setActiveConditions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -82,18 +83,26 @@ function App() {
     }
   };
 
+  const [boundaryError, setBoundaryError] = useState(null);
+
   const handleSelectRoute = (route) => {
     setSelectedRoute(route);
   };
 
   const handleSelectOrigin = (loc) => {
+    setBoundaryError(null);
     setOriginLocation(loc);
-    setOrigin(loc.name || loc.nodeId || loc);
+    setOrigin(typeof loc === 'object' ? loc.name || loc.label || loc.nodeId : loc);
   };
 
   const handleSelectDestination = (loc) => {
+    setBoundaryError(null);
     setDestinationLocation(loc);
-    setDestination(loc.name || loc.nodeId || loc);
+    setDestination(typeof loc === 'object' ? loc.name || loc.label || loc.nodeId : loc);
+  };
+
+  const handleBoundaryError = (errorMsg) => {
+    setBoundaryError(errorMsg);
   };
 
   const handleOpenReportModal = (loc) => {
@@ -110,9 +119,18 @@ function App() {
   };
 
   const handleGenerateRoutes = useCallback(async (searchParams = {}) => {
-    const currentOrigin = searchParams.origin ?? origin;
-    const currentDest = searchParams.destination ?? destination;
+    const currentOrigin = searchParams.originLocation ?? searchParams.origin ?? originLocation ?? origin;
+    const currentDest = searchParams.destinationLocation ?? searchParams.destination ?? destinationLocation ?? destination;
+    const currentMode = searchParams.travelMode ?? travelMode;
 
+    const hasOrigin = Boolean(typeof currentOrigin === 'object' ? currentOrigin : (typeof currentOrigin === 'string' && currentOrigin.trim()));
+    const hasDest = Boolean(typeof currentDest === 'object' ? currentDest : (typeof currentDest === 'string' && currentDest.trim()));
+
+    if (!hasOrigin || !hasDest) {
+      return;
+    }
+
+    if (searchParams.travelMode) setTravelMode(searchParams.travelMode);
     if (searchParams.originLocation) setOriginLocation(searchParams.originLocation);
     if (searchParams.destinationLocation) setDestinationLocation(searchParams.destinationLocation);
 
@@ -121,6 +139,7 @@ function App() {
 
     setLoading(true);
     setError(null);
+    setBoundaryError(null);
 
     try {
       // 1. Resolve Panki graph nodes first
@@ -150,14 +169,15 @@ function App() {
         startNodeId,
         targetNodeId,
         preference: preferenceProfile,
-        options: { weights, avoidHazards: true, useConditions: true },
+        travelMode: currentMode,
+        options: { weights, avoidHazards: true, useConditions: true, travelMode: currentMode },
       });
 
       const fallbackStatus = Boolean(rawRoutes?.isFallback);
       setIsFallback(fallbackStatus);
 
       const formattedRoutes = (rawRoutes || []).map((r, index) =>
-        transformRouteToUI(r, index, fallbackStatus)
+        transformRouteToUI(r, index, fallbackStatus, currentMode)
       );
 
       setRoutes(formattedRoutes);
@@ -172,20 +192,22 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [origin, destination, preferences]);
+  }, [origin, destination, originLocation, destinationLocation, preferences, travelMode]);
 
   // Re-calculate routes when active conditions update
   useEffect(() => {
     let isMounted = true;
     queueMicrotask(() => {
       if (isMounted) {
-        handleGenerateRoutes();
+        if ((originLocation || origin) && (destinationLocation || destination)) {
+          handleGenerateRoutes();
+        }
       }
     });
     return () => {
       isMounted = false;
     };
-  }, [activeConditions, handleGenerateRoutes]);
+  }, [activeConditions, handleGenerateRoutes, originLocation, origin, destinationLocation, destination]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-greenroute-200 selection:text-greenroute-900">
@@ -211,15 +233,15 @@ function App() {
             loading={loading}
           />
 
-          {error && (
+          {(boundaryError || error) && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-800 text-sm font-semibold shadow-sm">
               <div className="flex items-center gap-2 mb-1 text-red-900 font-bold">
                 <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span>Routing Error</span>
+                <span>{boundaryError ? 'Selection Error' : 'Routing Error'}</span>
               </div>
-              {error}
+              {boundaryError || error}
             </div>
           )}
 
@@ -243,6 +265,7 @@ function App() {
               onSelectDestination={handleSelectDestination}
               onResolveCondition={handleResolveCondition}
               onOpenReportModal={handleOpenReportModal}
+              onBoundaryError={handleBoundaryError}
             />
           </div>
 

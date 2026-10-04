@@ -1,4 +1,5 @@
 import assert from "node:assert";
+import fs from "node:fs";
 import {
   // Phase 1 Constants & Enums
   ALLOWED_CONDITION_TYPES,
@@ -63,6 +64,9 @@ import {
   applyCampusConditionsToGraph,
   getPenalizedEdgeCost,
   findDijkstraRoute,
+  TRAVEL_MODE_SPEEDS,
+  getSpeedForTravelMode,
+  calculateDurationSeconds,
 } from "../src/algorithm/index.js";
 import {
   pankiAreaConfig,
@@ -92,6 +96,9 @@ import {
   getPankiLocationById,
   resolvePankiLocationToNode,
   getAvailablePankiNamedLocations,
+  createMapClickLocation,
+  isPointInPankiBoundary,
+  findRoadNameForCoordinate,
 } from "../src/areas/panki/locationSearch.js";
 import {
   mapConditionToPankiEdge,
@@ -1606,6 +1613,254 @@ it("preserves N1-N7 regression, Panki environmental zones, and location search",
 
   // Environmental zones intact
   assert.strictEqual(pankiZonesGeoJSON.features.length, 4);
+});
+
+// ---------------------------------------------------------------------------
+// 21. Travel Mode & Route-Specific Environmental Metrics Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 21] Travel Mode & Route-Specific Environmental Metrics Tests:");
+
+it("calculates same route distance with walking duration > cycling duration", async () => {
+  const walkingRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: pankiGraph.nodes[0].id,
+    targetNodeId: pankiGraph.nodes[10].id,
+    travelMode: "walking",
+  });
+  const cyclingRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: pankiGraph.nodes[0].id,
+    targetNodeId: pankiGraph.nodes[10].id,
+    travelMode: "cycling",
+  });
+
+  assert.ok(walkingRoutes.length > 0);
+  assert.ok(cyclingRoutes.length > 0);
+
+  // Distance remains unchanged
+  assert.strictEqual(walkingRoutes[0].totalDistance, cyclingRoutes[0].totalDistance);
+  // Walking duration > cycling duration
+  assert.ok(walkingRoutes[0].totalTime > cyclingRoutes[0].totalTime);
+});
+
+it("ensures cycling duration is lower than walking for non-zero distance and edge distance remains unchanged", () => {
+  assert.strictEqual(getSpeedForTravelMode("walking"), TRAVEL_MODE_SPEEDS.walking);
+  const dist = 1000; // 1 km
+  const walkSec = calculateDurationSeconds(dist, "walking");
+  const cycleSec = calculateDurationSeconds(dist, "cycling");
+
+  assert.strictEqual(walkSec, Math.round(1000 / TRAVEL_MODE_SPEEDS.walking)); // ~719s (~12m)
+  assert.strictEqual(cycleSec, Math.round(1000 / TRAVEL_MODE_SPEEDS.cycling)); // ~240s (~4m)
+  assert.ok(cycleSec < walkSec);
+});
+
+it("passes travel mode into runtime route calculation and UI route object", async () => {
+  const rawRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: pankiGraph.nodes[0].id,
+    targetNodeId: pankiGraph.nodes[10].id,
+    travelMode: "cycling",
+  });
+
+  assert.strictEqual(rawRoutes[0].travelMode, "cycling");
+
+  const uiRoute = transformRouteToUI(rawRoutes[0], 0, false, "cycling");
+  assert.strictEqual(uiRoute.travelMode, "cycling");
+  assert.ok(uiRoute.duration.includes("min") || uiRoute.duration.includes("sec"));
+});
+
+it("computes distance-weighted environmental metrics from selected route edges", async () => {
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: pankiGraph.nodes[0].id,
+    targetNodeId: pankiGraph.nodes[50].id,
+    travelMode: "walking",
+  });
+
+  assert.ok(routes.length > 0);
+  const route = routes[0];
+  assert.ok(route.aggregatedEnvironmental);
+  assert.ok(typeof route.aggregatedEnvironmental.greenery === "number");
+  assert.ok(typeof route.aggregatedEnvironmental.shade === "number");
+  assert.ok(typeof route.aggregatedEnvironmental.pollution === "number");
+  assert.ok(typeof route.aggregatedEnvironmental.heat === "number");
+
+  const uiRoute = transformRouteToUI(route, 0, false, "walking");
+  assert.strictEqual(uiRoute.isSimulated, true);
+  assert.ok(uiRoute.disclaimer);
+  assert.ok(uiRoute.source);
+  assert.strictEqual(uiRoute.greenery, Math.min(100, Math.max(0, Math.round(route.aggregatedEnvironmental.greenery * 100))));
+});
+
+// ---------------------------------------------------------------------------
+// 22. Free Map Click Location Selection & Navigation Markers Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 22] Free Map Click Location Selection & Navigation Markers Tests:");
+
+it("creates normalized map-click location object preserving raw clicked coordinates and resolving Panki graph node", () => {
+  const lat = 26.4596;
+  const lng = 80.2383;
+  const loc = createMapClickLocation(lat, lng);
+
+  assert.ok(loc);
+  assert.strictEqual(loc.error, undefined);
+  assert.strictEqual(loc.coordinate.latitude, 26.4596);
+  assert.strictEqual(loc.coordinate.longitude, 80.2383);
+  assert.strictEqual(loc.source, "map-click");
+  assert.strictEqual(loc.isMapClick, true);
+  assert.strictEqual(loc.isFabricated, false);
+  assert.ok(typeof loc.nodeId === "string" && loc.nodeId.startsWith("osm-node-"));
+});
+
+it("rejects map click outside Panki study area boundary with clear error message", () => {
+  const outsideLat = 26.8000;
+  const outsideLng = 80.9000;
+
+  assert.strictEqual(isPointInPankiBoundary(outsideLat, outsideLng), false);
+
+  const loc = createMapClickLocation(outsideLat, outsideLng);
+  assert.strictEqual(loc.error, "Please select a location inside the Panki study area.");
+});
+
+it("resolves real local OSM road name when clicked near a named feature without fabricating landmark names", () => {
+  const loc = createMapClickLocation(26.4596, 80.2383);
+  const roadName = findRoadNameForCoordinate(26.4596, 80.2383);
+  assert.ok(loc.name === "Kalpi Road" || loc.name === "Selected Map Location");
+  assert.ok(roadName === "Kalpi Road" || roadName === null);
+  assert.strictEqual(loc.isFabricated, false);
+});
+
+it("supports arbitrary map-click locations in calculateLiveCampusRoutes and generates valid candidate routes", async () => {
+  const startLoc = createMapClickLocation(26.4596, 80.2383);
+  const destLoc = createMapClickLocation(26.4620, 80.2400);
+
+  assert.ok(startLoc.nodeId);
+  assert.ok(destLoc.nodeId);
+
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: startLoc,
+    targetNodeId: destLoc,
+    travelMode: "walking",
+  });
+
+  assert.ok(routes.length > 0);
+  assert.ok(routes[0].totalDistance > 0);
+  assert.ok(routes[0].totalTime > 0);
+});
+
+it("supports mixed input methods (Named Start + Map Dest, Map Start + Named Dest, Map Start + Map Dest)", async () => {
+  const mapStart = createMapClickLocation(26.4596, 80.2383);
+  const mapDest = createMapClickLocation(26.4620, 80.2400);
+
+  // 1. Named Start + Map Dest
+  const r1 = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: "Kalpi Road",
+    targetNodeId: mapDest,
+    travelMode: "walking",
+  });
+  assert.ok(r1.length > 0);
+
+  // 2. Map Start + Named Dest
+  const r2 = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: mapStart,
+    targetNodeId: "M.I.G Road",
+    travelMode: "walking",
+  });
+  assert.ok(r2.length > 0);
+
+  // 3. Map Start + Map Dest
+  const r3 = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: mapStart,
+    targetNodeId: mapDest,
+    travelMode: "walking",
+  });
+  assert.ok(r3.length > 0);
+});
+
+it("preserves named search regression for Kalpi Road, Flyover, M.I.G Road, and Kanpur Bypass", () => {
+  assert.ok(resolvePankiLocationToNode("Kalpi Road"));
+  assert.ok(resolvePankiLocationToNode("Kalpi Road Flyover"));
+  assert.ok(resolvePankiLocationToNode("M.I.G Road"));
+  assert.ok(resolvePankiLocationToNode("Kanpur Bypass"));
+});
+
+it("preserves Walking vs Cycling travel mode and environmental scoring on arbitrary map-click endpoints", async () => {
+  const startLoc = createMapClickLocation(26.4596, 80.2383);
+  const destLoc = createMapClickLocation(26.4650, 80.2420);
+
+  const walkingRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: startLoc,
+    targetNodeId: destLoc,
+    travelMode: "walking",
+  });
+
+  const cyclingRoutes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: startLoc,
+    targetNodeId: destLoc,
+    travelMode: "cycling",
+  });
+
+  assert.ok(walkingRoutes.length > 0);
+  assert.ok(cyclingRoutes.length > 0);
+  assert.strictEqual(walkingRoutes[0].totalDistance, cyclingRoutes[0].totalDistance);
+  assert.ok(walkingRoutes[0].totalTime > cyclingRoutes[0].totalTime);
+  assert.ok(walkingRoutes[0].aggregatedEnvironmental);
+});
+
+// ---------------------------------------------------------------------------
+// 23. Remove Default Locations & Empty State UI Validation Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 23] Remove Default Locations & Empty State UI Validation Tests:");
+
+it("verifies initial Origin and Destination defaults are empty strings in SearchBox and App state", () => {
+  const searchBoxCode = import.meta.url ? fs.readFileSync(new URL("../src/components/SearchBox.jsx", import.meta.url), "utf-8") : "";
+  const appCode = import.meta.url ? fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf-8") : "";
+
+  // Labels
+  assert.ok(searchBoxCode.includes('<label className="block text-sm font-semibold text-slate-700">Origin</label>'));
+  assert.ok(searchBoxCode.includes('<label className="block text-sm font-semibold text-slate-700">Destination</label>'));
+
+  // Placeholders
+  assert.ok(searchBoxCode.includes('placeholder="Where are you?"'));
+  assert.ok(searchBoxCode.includes('placeholder="Where do you want to go?"'));
+
+  // Defaults in App.jsx
+  assert.ok(appCode.includes("const [origin, setOrigin] = useState('');"));
+  assert.ok(appCode.includes("const [destination, setDestination] = useState('');"));
+
+  // Ensure Kalpi Road and M.I.G Road are NOT hardcoded as initial state defaults
+  assert.ok(!appCode.includes("const [origin, setOrigin] = useState('Kalpi Road');"));
+  assert.ok(!appCode.includes("const [destination, setDestination] = useState('M.I.G Road');"));
+});
+
+it("verifies Kalpi Road and M.I.G Road remain in Panki search dataset and resolve correctly", () => {
+  const kalpiRes = searchPankiLocations("Kalpi Road");
+  const migRes = searchPankiLocations("M.I.G Road");
+
+  assert.ok(kalpiRes.length > 0);
+  assert.ok(migRes.length > 0);
+  assert.strictEqual(kalpiRes[0].name, "Kalpi Road");
+  assert.strictEqual(migRes[0].name, "M.I.G Road");
+  assert.ok(resolvePankiLocationToNode("Kalpi Road"));
+  assert.ok(resolvePankiLocationToNode("M.I.G Road"));
+});
+
+it("verifies free map-click Start and Destination selection functions remain fully functional with empty initial state", () => {
+  const startLoc = createMapClickLocation(26.4596, 80.2383);
+  const destLoc = createMapClickLocation(26.4650, 80.2420);
+
+  assert.ok(startLoc);
+  assert.ok(destLoc);
+  assert.strictEqual(startLoc.isMapClick, true);
+  assert.strictEqual(destLoc.isMapClick, true);
+  assert.strictEqual(startLoc.coordinate.latitude, 26.4596);
+  assert.strictEqual(destLoc.coordinate.latitude, 26.4650);
 });
 
 // ---------------------------------------------------------------------------

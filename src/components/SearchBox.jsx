@@ -2,18 +2,18 @@ import { useState, useEffect, useRef } from 'react';
 import { getPankiLocationSuggestions, searchPankiLocations } from '../areas/panki/locationSearch.js';
 
 export default function SearchBox({
-  origin: originProp = 'Kalpi Road',
-  destination: destinationProp = 'M.I.G Road',
+  origin: originProp = '',
+  destination: destinationProp = '',
   onSearch,
   onSelectOrigin,
   onSelectDestination,
   loading = false,
 }) {
   const [origin, setOrigin] = useState(
-    typeof originProp === 'object' ? originProp.name || '' : originProp
+    typeof originProp === 'object' ? originProp.name || '' : originProp || ''
   );
   const [destination, setDestination] = useState(
-    typeof destinationProp === 'object' ? destinationProp.name || '' : destinationProp
+    typeof destinationProp === 'object' ? destinationProp.name || '' : destinationProp || ''
   );
   const [travelMode, setTravelMode] = useState('walking');
 
@@ -31,14 +31,13 @@ export default function SearchBox({
 
   if (originProp !== prevOriginProp) {
     setPrevOriginProp(originProp);
-    setOrigin(typeof originProp === 'object' ? originProp.name || '' : originProp);
+    setOrigin(typeof originProp === 'object' ? originProp.name || '' : originProp || '');
   }
 
   if (destinationProp !== prevDestProp) {
     setPrevDestProp(destinationProp);
-    setDestination(typeof destinationProp === 'object' ? destinationProp.name || '' : destinationProp);
+    setDestination(typeof destinationProp === 'object' ? destinationProp.name || '' : destinationProp || '');
   }
-
 
   // Click outside listener to close suggestion dropdowns
   useEffect(() => {
@@ -68,6 +67,15 @@ export default function SearchBox({
     setShowDestSuggestions(true);
   };
 
+  const isOriginFromMap = typeof originProp === 'object' && (originProp?.source === 'map-click' || originProp?.isMapClick);
+  const isDestFromMap = typeof destinationProp === 'object' && (destinationProp?.source === 'map-click' || destinationProp?.isMapClick);
+
+  const isFormValid = Boolean(
+    typeof origin === 'object' ? origin : (typeof origin === 'string' && origin.trim())
+  ) && Boolean(
+    typeof destination === 'object' ? destination : (typeof destination === 'string' && destination.trim())
+  );
+
   const selectOriginItem = (item) => {
     setOrigin(item.name);
     setShowOriginSuggestions(false);
@@ -82,19 +90,28 @@ export default function SearchBox({
 
   const handleGenerate = (e) => {
     if (e) e.preventDefault();
-    if (loading) return;
+    if (loading || !isFormValid) return;
 
-    // Resolve matching location objects if available
-    const originResults = searchPankiLocations(origin);
-    const destResults = searchPankiLocations(destination);
+    let originLocObj;
+    if (typeof originProp === 'object' && originProp !== null && (originProp.name === origin || originProp.label === origin)) {
+      originLocObj = originProp;
+    } else {
+      const originResults = searchPankiLocations(origin);
+      originLocObj = originResults.length > 0 ? originResults[0] : { name: origin, nodeId: origin };
+    }
 
-    const originLocObj = originResults.length > 0 ? originResults[0] : { name: origin, nodeId: origin };
-    const destLocObj = destResults.length > 0 ? destResults[0] : { name: destination, nodeId: destination };
+    let destLocObj;
+    if (typeof destinationProp === 'object' && destinationProp !== null && (destinationProp.name === destination || destinationProp.label === destination)) {
+      destLocObj = destinationProp;
+    } else {
+      const destResults = searchPankiLocations(destination);
+      destLocObj = destResults.length > 0 ? destResults[0] : { name: destination, nodeId: destination };
+    }
 
     if (onSearch) {
       onSearch({
-        origin: originLocObj.nodeId || origin,
-        destination: destLocObj.nodeId || destination,
+        origin: originLocObj.nodeId || originLocObj.resolvedNodeId || origin,
+        destination: destLocObj.nodeId || destLocObj.resolvedNodeId || destination,
         originLocation: originLocObj,
         destinationLocation: destLocObj,
         travelMode,
@@ -109,7 +126,14 @@ export default function SearchBox({
       <form onSubmit={handleGenerate} className="space-y-4 sm:space-y-5">
         {/* ORIGIN INPUT */}
         <div className="relative" ref={originBoxRef}>
-          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Origin</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-sm font-semibold text-slate-700">Origin</label>
+            {isOriginFromMap && (
+              <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md flex items-center gap-1">
+                <span>📍</span> Selected on map
+              </span>
+            )}
+          </div>
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none z-10">
               <div className="w-3 h-3 rounded-full border-2 border-emerald-600 bg-emerald-500 transition-colors"></div>
@@ -124,7 +148,7 @@ export default function SearchBox({
               }}
               disabled={loading}
               className="block w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-greenroute-500 focus:border-greenroute-500 sm:text-sm transition-all outline-none disabled:opacity-60"
-              placeholder="Search Panki origin or node..."
+              placeholder="Where are you?"
             />
           </div>
 
@@ -164,7 +188,14 @@ export default function SearchBox({
 
         {/* DESTINATION INPUT */}
         <div className="relative" ref={destBoxRef}>
-          <label className="block text-sm font-semibold text-slate-700 mb-1.5">Destination</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-sm font-semibold text-slate-700">Destination</label>
+            {isDestFromMap && (
+              <span className="text-[10px] font-bold bg-red-100 text-red-800 px-2 py-0.5 rounded-md flex items-center gap-1">
+                <span>📍</span> Selected on map
+              </span>
+            )}
+          </div>
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none z-10">
               <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
@@ -181,7 +212,7 @@ export default function SearchBox({
               }}
               disabled={loading}
               className="block w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-greenroute-500 focus:border-greenroute-500 sm:text-sm transition-all outline-none disabled:opacity-60"
-              placeholder="Search Panki destination or node..."
+              placeholder="Where do you want to go?"
             />
           </div>
 
@@ -223,7 +254,7 @@ export default function SearchBox({
               key={`pill-${item.name}`}
               type="button"
               onClick={() => {
-                if (!origin || origin === 'North Gate') {
+                if (!origin) {
                   selectOriginItem(item);
                 } else {
                   selectDestItem(item);
@@ -264,7 +295,7 @@ export default function SearchBox({
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || !isFormValid}
           className="w-full mt-4 bg-slate-900 text-white py-3.5 px-4 rounded-xl font-bold hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-slate-900/20 transition-all shadow-md hover:shadow-lg active:scale-[0.98] outline-none disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {loading ? 'Generating Routes...' : 'Generate Routes'}

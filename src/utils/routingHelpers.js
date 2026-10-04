@@ -119,7 +119,7 @@ export function getPreferenceWeights(preferences = {}, profile = 'balanced') {
  * @param {boolean} [isFallback=false] - Whether route set is using offline fallback
  * @returns {Object} UI formatted route object
  */
-export function transformRouteToUI(route = {}, index = 0, isFallback = false) {
+export function transformRouteToUI(route = {}, index = 0, isFallback = false, travelMode = 'walking') {
   const totalTimeSec = Number(route.totalTime) || 0;
   const totalDistMeters = Number(route.totalDistance) || 0;
   const durationStr = totalTimeSec < 60 ? `${Math.round(totalTimeSec)} sec` : `${Math.round(totalTimeSec / 60)} min`;
@@ -135,6 +135,9 @@ export function transformRouteToUI(route = {}, index = 0, isFallback = false) {
   const heatVal = route.aggregatedEnvironmental?.heat ?? 20;
   const trafficStr = heatVal > 28 ? 'High' : heatVal > 22 ? 'Moderate' : 'Low';
   const heatStr = heatVal <= 20 ? 'Low' : heatVal <= 28 ? 'Medium' : 'High';
+
+  const currentMode = route.travelMode || travelMode || 'walking';
+  const modeLabel = currentMode.charAt(0).toUpperCase() + currentMode.slice(1);
 
   const rawName = route.name || `Campus Route ${index + 1}`;
   let category = 'Balanced';
@@ -155,12 +158,12 @@ export function transformRouteToUI(route = {}, index = 0, isFallback = false) {
 
   let explanation = route.explanation;
   if (!explanation) {
-    if (category === 'Greenest') {
-      explanation = 'This route prioritizes maximum vegetation canopy, high tree shade, and low air pollution along eco-friendly campus paths.';
-    } else if (category === 'Fastest') {
-      explanation = 'This route optimizes direct physical travel distance and minimum time to reach your destination quickly.';
+    if (rawName.includes('Shortest') || rawName.includes('Fastest')) {
+      explanation = `Optimized for ${modeLabel.toLowerCase()} speed and minimal travel distance (${distanceStr}, ~${durationStr}). Direct path with ${pollutionStr.toLowerCase()} pollution exposure.`;
+    } else if (rawName.includes('Eco') || rawName.includes('Green') || greeneryPct > 65) {
+      explanation = `Prioritizes environmental quality for ${modeLabel.toLowerCase()} travel with ${greeneryPct}% greenery coverage and ${shadePct}% shade (${distanceStr}, ~${durationStr}).`;
     } else {
-      explanation = 'A balanced campus route offering comfortable shade, good air quality, and efficient travel time.';
+      explanation = `${rawName} offering a balanced ${modeLabel.toLowerCase()} route (${distanceStr}, ~${durationStr}) with ${greeneryPct}% greenery and ${shadePct}% shade.`;
     }
   }
 
@@ -170,12 +173,18 @@ export function transformRouteToUI(route = {}, index = 0, isFallback = false) {
     category,
     duration: durationStr,
     distance: distanceStr,
+    totalDistance: totalDistMeters,
+    totalTime: totalTimeSec,
+    travelMode: currentMode,
     environmentalScore: scoreVal,
     greenery: greeneryPct,
     shade: shadePct,
     pollution: pollutionStr,
     traffic: trafficStr,
     heat: heatStr,
+    isSimulated: Boolean(route.aggregatedEnvironmental?.isSimulated || route.isSimulated),
+    disclaimer: route.aggregatedEnvironmental?.disclaimer || route.disclaimer || null,
+    source: route.aggregatedEnvironmental?.source || route.source || null,
     warning,
     explanation,
     nodeIds: route.nodeIds || [],

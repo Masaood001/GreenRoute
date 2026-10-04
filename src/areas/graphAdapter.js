@@ -151,15 +151,36 @@ export function resolveNodeInArea(areaId, nodeInput) {
     if (graph.nodes.has(nodeInput)) {
       return nodeInput;
     }
-    // Case-insensitive match on node ID
+    const cleanInput = nodeInput.trim().toLowerCase();
+    // 1. Case-insensitive match on node ID
     for (const id of graph.nodes.keys()) {
-      if (id.toLowerCase() === nodeInput.toLowerCase()) {
+      if (id.toLowerCase() === cleanInput) {
+        return id;
+      }
+    }
+    // 2. Exact match on node metadata name
+    for (const [id, nodeObj] of graph.nodes.entries()) {
+      const nodeName = nodeObj.metadata?.name;
+      if (nodeName && typeof nodeName === 'string' && nodeName.toLowerCase() === cleanInput) {
+        return id;
+      }
+    }
+    // 3. Partial match on node metadata name
+    for (const [id, nodeObj] of graph.nodes.entries()) {
+      const nodeName = nodeObj.metadata?.name;
+      if (nodeName && typeof nodeName === 'string' && nodeName.toLowerCase().includes(cleanInput)) {
         return id;
       }
     }
   } else if (typeof nodeInput === 'object' && nodeInput !== null) {
-    const lat = nodeInput.latitude ?? nodeInput.lat;
-    const lng = nodeInput.longitude ?? nodeInput.lng;
+    if (nodeInput.nodeId && graph.nodes.has(nodeInput.nodeId)) {
+      return nodeInput.nodeId;
+    }
+    if (nodeInput.resolvedNodeId && graph.nodes.has(nodeInput.resolvedNodeId)) {
+      return nodeInput.resolvedNodeId;
+    }
+    const lat = nodeInput.latitude ?? nodeInput.lat ?? nodeInput.coordinate?.latitude;
+    const lng = nodeInput.longitude ?? nodeInput.lng ?? nodeInput.coordinate?.longitude;
     if (typeof lat === 'number' && typeof lng === 'number') {
       const nearest = findNearestNodeInArea(areaId, lat, lng);
       return nearest ? nearest.id : null;

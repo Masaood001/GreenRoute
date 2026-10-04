@@ -2,6 +2,7 @@ import { Route } from './models/Route.js';
 import { EnvironmentalAttributes } from './models/EnvironmentalAttributes.js';
 import { rankRoutes, WEIGHT_PROFILES } from './scoring.js';
 import { getPenalizedEdgeCost } from './adapters/campusConditionsAdapter.js';
+import { calculateDurationSeconds } from './travelSpeed.js';
 
 
 /**
@@ -126,30 +127,51 @@ export function findDijkstraRoute(graph, startNodeId, targetNodeId, options = {}
     }
   }
 
-  // Aggregate distance, travel time, and environmental attributes
+  const travelMode = options.travelMode || options.mode || 'walking';
+
+  // Aggregate distance, travel time, and environmental attributes using distance-weighted averaging
   let totalDistance = 0;
   let totalTime = 0;
-  let totalPollution = 0;
-  let totalHeat = 0;
-  let totalGreenery = 0;
-  let totalShade = 0;
+  let weightedPollutionSum = 0;
+  let weightedHeatSum = 0;
+  let weightedGreenerySum = 0;
+  let weightedShadeSum = 0;
+  let isSimulated = false;
+  let disclaimer = null;
+  let source = null;
 
   for (const edge of edges) {
-    totalDistance += edge.distance;
-    totalTime += edge.time;
-    totalPollution += edge.environmentalAttributes.pollution;
-    totalHeat += edge.environmentalAttributes.heat;
-    totalGreenery += edge.environmentalAttributes.greenery;
-    totalShade += edge.environmentalAttributes.shade;
+    const dist = edge.distance || 0;
+    totalDistance += dist;
+
+    // Travel time calculated using central travel-speed model
+    const edgeTime = calculateDurationSeconds(dist, travelMode);
+    totalTime += edgeTime;
+
+    const env = edge.environmentalAttributes || {};
+    weightedPollutionSum += (env.pollution || 0) * dist;
+    weightedHeatSum += (env.heat || 0) * dist;
+    weightedGreenerySum += (env.greenery || 0) * dist;
+    weightedShadeSum += (env.shade || 0) * dist;
+
+    if (edge.metadata?.isSimulated) {
+      isSimulated = true;
+      if (edge.metadata.disclaimer) disclaimer = edge.metadata.disclaimer;
+      if (edge.metadata.source) source = edge.metadata.source;
+    }
   }
 
-  const edgeCount = edges.length || 1;
+  const denom = totalDistance > 0 ? totalDistance : (edges.length || 1);
   const aggregatedEnvironmental = new EnvironmentalAttributes({
-    pollution: Number((totalPollution / edgeCount).toFixed(2)),
-    heat: Number((totalHeat / edgeCount).toFixed(2)),
-    greenery: Number((totalGreenery / edgeCount).toFixed(2)),
-    shade: Number((totalShade / edgeCount).toFixed(2)),
+    pollution: Number((weightedPollutionSum / denom).toFixed(2)),
+    heat: Number((weightedHeatSum / denom).toFixed(2)),
+    greenery: Number((weightedGreenerySum / denom).toFixed(2)),
+    shade: Number((weightedShadeSum / denom).toFixed(2)),
   });
+
+  aggregatedEnvironmental.isSimulated = isSimulated;
+  if (disclaimer) aggregatedEnvironmental.disclaimer = disclaimer;
+  if (source) aggregatedEnvironmental.source = source;
 
   return new Route({
     nodeIds,
@@ -157,6 +179,7 @@ export function findDijkstraRoute(graph, startNodeId, targetNodeId, options = {}
     totalDistance,
     totalTime,
     aggregatedEnvironmental,
+    travelMode,
   });
 }
 
@@ -200,11 +223,12 @@ export function findCandidateRoutes(graph, startNodeId, targetNodeId, options = 
 
   const maxRoutes = options.maxRoutes || 5;
   const weights = resolveWeights(options);
+  const travelMode = options.travelMode || options.mode || 'walking';
 
   // Multi-objective strategies for discovering candidate routes
   const strategies = [
     { name: 'Shortest Distance Route', costFn: (edge) => edge.distance },
-    { name: 'Fastest Travel Time Route', costFn: (edge) => edge.time },
+    { name: 'Fastest Travel Time Route', costFn: (edge) => calculateDurationSeconds(edge.distance, travelMode) },
     {
       name: 'Eco Green Route',
       costFn: (edge) => {

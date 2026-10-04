@@ -28,6 +28,7 @@ export class Route {
     score = null,
     rank = null,
     normalizedFactors = null,
+    travelMode = 'walking',
   } = {}) {
     this.id = id;
     this.name = name;
@@ -39,6 +40,7 @@ export class Route {
     this.score = score;
     this.rank = rank;
     this.normalizedFactors = normalizedFactors;
+    this.travelMode = travelMode;
   }
 }
 

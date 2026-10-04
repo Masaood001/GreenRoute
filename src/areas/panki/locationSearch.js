@@ -1,6 +1,8 @@
 import rawFeaturesData from './data/raw/panki_road_features.json' with { type: 'json' };
 import pankiGraphData from './data/processed/pankiGraph.json' with { type: 'json' };
 import { findNearestNodeInArea, resolveNodeInArea } from '../graphAdapter.js';
+import { pankiAreaConfig } from './areaConfig.js';
+import { findNearestEdgeInPanki } from './conditionMapper.js';
 
 // Build Node Lookup Map
 const nodeMap = new Map();
@@ -182,6 +184,95 @@ export function getPankiLocationById(id) {
 }
 
 /**
+ * Checks if a given (lat, lng) coordinate point is strictly inside the Panki study area boundary.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {boolean}
+ */
+export function isPointInPankiBoundary(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+    return false;
+  }
+  const polygonRing = pankiAreaConfig.boundary?.features?.[0]?.geometry?.coordinates?.[0];
+  if (!polygonRing || !Array.isArray(polygonRing)) {
+    return false;
+  }
+
+  const x = lng;
+  const y = lat;
+  let inside = false;
+
+  for (let i = 0, j = polygonRing.length - 1; i < polygonRing.length; j = i++) {
+    const xi = polygonRing[i][0];
+    const yi = polygonRing[i][1];
+    const xj = polygonRing[j][0];
+    const yj = polygonRing[j][1];
+
+    const intersect =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+
+  return inside;
+}
+
+/**
+ * Resolves a real road name in the local Panki dataset near the given coordinate, if available.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {string|null} Real road name or null
+ */
+export function findRoadNameForCoordinate(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+    return null;
+  }
+
+  const nearestResult = findNearestEdgeInPanki(lat, lng);
+  if (nearestResult && nearestResult.distanceMeters <= 80 && nearestResult.edge) {
+    const edgeName = nearestResult.edge.name || nearestResult.edge.metadata?.name;
+    if (edgeName && typeof edgeName === 'string' && edgeName.trim() && !edgeName.startsWith('osm-')) {
+      return edgeName.trim();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Creates a normalized location object for a free map click, preserving raw coordinates and resolving to the Panki graph.
+ * Enforces boundary containment and generates no fake landmark names.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {object} Location object or error object
+ */
+export function createMapClickLocation(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+    return { error: 'Invalid coordinates provided.' };
+  }
+
+  if (!isPointInPankiBoundary(lat, lng)) {
+    return { error: 'Please select a location inside the Panki study area.' };
+  }
+
+  const nearestNode = findNearestNodeInArea('panki-kanpur', lat, lng);
+  const roadName = findRoadNameForCoordinate(lat, lng);
+  const displayLabel = roadName || 'Selected Map Location';
+
+  return {
+    id: `map-click-${lat.toFixed(6)}-${lng.toFixed(6)}`,
+    name: displayLabel,
+    label: displayLabel,
+    coordinate: { latitude: lat, longitude: lng },
+    nodeId: nearestNode ? nearestNode.id : null,
+    resolvedNodeId: nearestNode ? nearestNode.id : null,
+    source: 'map-click',
+    isMapClick: true,
+    isFabricated: false,
+    distanceToNodeMeters: nearestNode ? nearestNode.distanceMeters : null,
+  };
+}
+
+/**
  * Resolves any Panki location input (object, name string, node ID, or coordinate)
  * to a valid Panki graph node ID.
  * @param {object|string} locationInput
@@ -192,6 +283,7 @@ export function resolvePankiLocationToNode(locationInput) {
 
   if (typeof locationInput === 'object') {
     if (locationInput.nodeId) return locationInput.nodeId;
+    if (locationInput.resolvedNodeId) return locationInput.resolvedNodeId;
     if (locationInput.coordinate) {
       return resolveNodeInArea('panki-kanpur', locationInput.coordinate);
     }
