@@ -52,7 +52,7 @@ export function validateCampusCondition(data) {
       `Invalid severity "${data.severity}". Must be one of: ${ALLOWED_SEVERITIES.join(", ")}`
     );
   }
-  if (!ALLOWED_STATUSES.includes(data.status)) {
+  if (data.status && !ALLOWED_STATUSES.includes(data.status)) {
     throw new Error(
       `Invalid status "${data.status}". Must be one of: ${ALLOWED_STATUSES.join(", ")}`
     );
@@ -135,13 +135,18 @@ export async function getCampusConditionById(conditionId) {
 }
 
 /**
- * Add a new campus condition (admin-only operation guarded by rules).
+ * Add a new campus condition (admin or owner authenticated).
  * @param {object} conditionData
  * @returns {Promise<string>} The created document ID
  */
 export async function addCampusCondition(conditionData) {
+  validateCampusCondition(conditionData);
+
   const currentUser = auth.currentUser;
-  const reportedBy = conditionData.reportedBy || (currentUser ? currentUser.uid : "system");
+  if (!currentUser) {
+    throw new Error("Authentication required: You must be signed in to submit a road condition.");
+  }
+  const reportedBy = currentUser.uid;
 
   const payload = {
     title: conditionData.title.trim(),
@@ -154,6 +159,7 @@ export async function addCampusCondition(conditionData) {
     startTime: conditionData.startTime || new Date().toISOString(),
     endTime: conditionData.endTime || null,
     reportedBy,
+    isSimulated: conditionData.isSimulated ?? false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -166,13 +172,18 @@ export async function addCampusCondition(conditionData) {
 }
 
 /**
- * Update an existing campus condition (admin-only).
+ * Update an existing campus condition (owner or admin authorized).
  * @param {string} conditionId
  * @param {object} updates
  * @returns {Promise<void>}
  */
 export async function updateCampusCondition(conditionId, updates) {
   if (!conditionId) throw new Error("Condition ID is required");
+
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error("Authentication required: You must be signed in to update or resolve a condition.");
+  }
 
   const docRef = doc(db, COLLECTION_NAME, conditionId);
   const payload = {
@@ -184,7 +195,7 @@ export async function updateCampusCondition(conditionId, updates) {
 }
 
 /**
- * Mark a campus condition as resolved (admin-only).
+ * Mark a campus condition as resolved (owner or admin authorized).
  * @param {string} conditionId
  * @returns {Promise<void>}
  */
@@ -195,12 +206,18 @@ export async function resolveCampusCondition(conditionId) {
 }
 
 /**
- * Delete a campus condition (admin-only).
+ * Delete a campus condition (owner or admin authorized).
  * @param {string} conditionId
  * @returns {Promise<void>}
  */
 export async function deleteCampusCondition(conditionId) {
   if (!conditionId) throw new Error("Condition ID is required");
+
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error("Authentication required: You must be signed in to delete a condition.");
+  }
+
   const docRef = doc(db, COLLECTION_NAME, conditionId);
   await deleteDoc(docRef);
 }

@@ -24,7 +24,7 @@ service cloud.firestore {
     // 2) admin custom claim on the auth token.
     function isAdmin() {
       return isAuthenticated() && (
-        (request.auth.token != null && request.auth.token.get('admin', false) == true) ||
+        (request.auth.token != null && 'admin' in request.auth.token && request.auth.token.admin == true) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -85,12 +85,19 @@ service cloud.firestore {
 
     // 1. Campus Conditions (hazards, construction, closures):
     // Public read ensures all students and faculty can access safety warnings.
-    // Writes restricted exclusively to verified administrators.
+    // Authenticated users can create real reports tagged with their own UID.
+    // Updates/resolutions are restricted to the report owner or verified administrators.
     match /campus_conditions/{conditionId} {
       allow read: if true;
-      allow create: if isAdmin() && isValidCampusCondition(request.resource.data);
-      allow update: if isAdmin() && isValidCampusCondition(request.resource.data);
-      allow delete: if isAdmin();
+      allow create: if (
+        (isAuthenticated() && request.resource.data.reportedBy == request.auth.uid) ||
+        isAdmin()
+      ) && isValidCampusCondition(request.resource.data);
+      allow update: if (
+        (isOwner(resource.data.reportedBy) && request.resource.data.reportedBy == resource.data.reportedBy) ||
+        isAdmin()
+      ) && isValidCampusCondition(request.resource.data);
+      allow delete: if isOwner(resource.data.reportedBy) || isAdmin();
     }
 
     // 2. Environmental Data (air quality, temperature, shade):
