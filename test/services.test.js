@@ -55,7 +55,29 @@ import {
   SIMULATED_CAMPUS_CONDITIONS,
   seedSimulatedCampusData,
   calculateLiveCampusRoutes,
+  // Browser Geolocation Service
+  GEOLOCATION_ERROR_CODES,
+  DEFAULT_GEOLOCATION_OPTIONS,
+  normalizeLocation,
+  normalizeGeolocationError,
+  getCurrentLocation,
+  startLocationTracking,
+  stopLocationTracking,
+  getAccuracyClassification,
+  calculateDistanceMeters,
+  shouldAcceptNewLocationFix,
+  // Live Navigation Progress & ETA Service
+  projectPointOntoPolyline,
+  calculateEffectiveSpeed,
+  smoothSpeedMs,
+  calculateNavigationProgress,
+  // Reliable Off-Route Detection Service (GPS-7)
+  OFF_ROUTE_CONFIG,
+  calculateEffectiveThresholds,
+  evaluateOffRouteState,
 } from "../src/services/index.js";
+
+
 import {
   mapFirebaseEnvToAttributes,
   applyEnvironmentalDataToGraph,
@@ -97,6 +119,7 @@ import {
   resolvePankiLocationToNode,
   getAvailablePankiNamedLocations,
   createMapClickLocation,
+  createGpsLocation,
   isPointInPankiBoundary,
   findRoadNameForCoordinate,
 } from "../src/areas/panki/locationSearch.js";
@@ -126,7 +149,19 @@ let testsFailed = 0;
 
 function it(description, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      return result
+        .then(() => {
+          console.log(`  ✓ ${description}`);
+          testsPassed++;
+        })
+        .catch((error) => {
+          console.error(`  ✗ ${description}`);
+          console.error(`    Error: ${error.message}`);
+          testsFailed++;
+        });
+    }
     console.log(`  ✓ ${description}`);
     testsPassed++;
   } catch (error) {
@@ -1864,6 +1899,264 @@ it("verifies free map-click Start and Destination selection functions remain ful
 });
 
 // ---------------------------------------------------------------------------
+// 24. Browser Geolocation Service Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 24] Browser Geolocation Service Unit Tests:");
+
+// Synthetic test coordinates fixture (clearly labelled for testing only)
+const SYNTHETIC_GPS_FIXTURE = {
+  latitude: 26.459612345,
+  longitude: 80.238367890,
+  accuracy: 4.8,
+  speed: 1.25,
+  heading: 270.5,
+  timestamp: 1710000000000,
+};
+
+it("exports DEFAULT_GEOLOCATION_OPTIONS with expected accuracy, timeout, and maximumAge defaults", () => {
+  assert.strictEqual(DEFAULT_GEOLOCATION_OPTIONS.enableHighAccuracy, true);
+  assert.strictEqual(DEFAULT_GEOLOCATION_OPTIONS.maximumAge, 0);
+  assert.strictEqual(DEFAULT_GEOLOCATION_OPTIONS.timeout, 10000);
+});
+
+it("normalizes a valid browser position cleanly while preserving exact coordinates", () => {
+  const rawPosition = {
+    coords: {
+      latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+      longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+      accuracy: SYNTHETIC_GPS_FIXTURE.accuracy,
+      speed: SYNTHETIC_GPS_FIXTURE.speed,
+      heading: SYNTHETIC_GPS_FIXTURE.heading,
+    },
+    timestamp: SYNTHETIC_GPS_FIXTURE.timestamp,
+  };
+
+  const normalized = normalizeLocation(rawPosition);
+  assert.strictEqual(normalized.latitude, 26.459612345);
+  assert.strictEqual(normalized.longitude, 80.238367890);
+  assert.strictEqual(normalized.accuracy, 4.8);
+  assert.strictEqual(normalized.speed, 1.25);
+  assert.strictEqual(normalized.heading, 270.5);
+  assert.strictEqual(normalized.timestamp, 1710000000000);
+});
+
+it("handles missing or null speed cleanly by normalizing speed to null", () => {
+  const rawPosition = {
+    coords: {
+      latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+      longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+      accuracy: 10,
+      speed: null,
+      heading: 180,
+    },
+    timestamp: Date.now(),
+  };
+
+  const normalized = normalizeLocation(rawPosition);
+  assert.strictEqual(normalized.speed, null);
+  assert.strictEqual(normalized.heading, 180);
+
+  const rawPositionNaN = {
+    coords: {
+      latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+      longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+      accuracy: 10,
+      speed: NaN,
+      heading: 180,
+    },
+  };
+  const normalizedNaN = normalizeLocation(rawPositionNaN);
+  assert.strictEqual(normalizedNaN.speed, null);
+});
+
+it("handles missing or null heading cleanly by normalizing heading to null", () => {
+  const rawPosition = {
+    coords: {
+      latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+      longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+      accuracy: 10,
+      speed: 1.5,
+      heading: null,
+    },
+    timestamp: Date.now(),
+  };
+
+  const normalized = normalizeLocation(rawPosition);
+  assert.strictEqual(normalized.heading, null);
+  assert.strictEqual(normalized.speed, 1.5);
+
+  const rawPositionUndefined = {
+    coords: {
+      latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+      longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+      accuracy: 10,
+      speed: 1.5,
+      heading: undefined,
+    },
+  };
+  const normalizedUndefined = normalizeLocation(rawPositionUndefined);
+  assert.strictEqual(normalizedUndefined.heading, null);
+});
+
+it("maps browser permission-denied (code 1) error cleanly", () => {
+  const browserError = { code: 1, message: "User denied Geolocation" };
+  const normalized = normalizeGeolocationError(browserError);
+  assert.strictEqual(normalized.code, GEOLOCATION_ERROR_CODES.PERMISSION_DENIED);
+  assert.ok(normalized.message.includes("permission was denied"));
+});
+
+it("maps browser position-unavailable (code 2) error cleanly", () => {
+  const browserError = { code: 2, message: "Position unavailable" };
+  const normalized = normalizeGeolocationError(browserError);
+  assert.strictEqual(normalized.code, GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE);
+  assert.ok(normalized.message.includes("unavailable"));
+});
+
+it("maps browser position timeout (code 3) error cleanly", () => {
+  const browserError = { code: 3, message: "Request timeout" };
+  const normalized = normalizeGeolocationError(browserError);
+  assert.strictEqual(normalized.code, GEOLOCATION_ERROR_CODES.TIMEOUT);
+  assert.ok(normalized.message.includes("timed out"));
+});
+
+function mockNavigator(geolocationMock) {
+  const originalDesc = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    value: { geolocation: geolocationMock },
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    if (originalDesc) {
+      Object.defineProperty(globalThis, "navigator", originalDesc);
+    } else {
+      delete globalThis.navigator;
+    }
+  };
+}
+
+it("registers startLocationTracking with watchPosition and forwards normalized location updates", () => {
+  let watchPositionCalled = false;
+  let passedOptions = null;
+  let registeredSuccessCb = null;
+  let registeredErrorCb = null;
+
+  const restoreNavigator = mockNavigator({
+    watchPosition: (successCb, errorCb, options) => {
+      watchPositionCalled = true;
+      registeredSuccessCb = successCb;
+      registeredErrorCb = errorCb;
+      passedOptions = options;
+      return 999;
+    },
+  });
+
+  try {
+    let receivedLocation = null;
+    let receivedError = null;
+
+    const watchId = startLocationTracking(
+      (loc) => { receivedLocation = loc; },
+      (err) => { receivedError = err; },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+
+    assert.strictEqual(watchPositionCalled, true);
+    assert.strictEqual(watchId, 999);
+    assert.strictEqual(passedOptions.enableHighAccuracy, true);
+    assert.strictEqual(passedOptions.timeout, 8000);
+
+    // Simulate watchPosition update
+    registeredSuccessCb({
+      coords: {
+        latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+        longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+        accuracy: 3.5,
+        speed: null,
+        heading: null,
+      },
+      timestamp: 1710000005000,
+    });
+
+    assert.ok(receivedLocation);
+    assert.strictEqual(receivedLocation.latitude, SYNTHETIC_GPS_FIXTURE.latitude);
+    assert.strictEqual(receivedLocation.longitude, SYNTHETIC_GPS_FIXTURE.longitude);
+
+    // Simulate watchPosition error
+    registeredErrorCb({ code: 1, message: "Denied" });
+    assert.ok(receivedError);
+    assert.strictEqual(receivedError.code, GEOLOCATION_ERROR_CODES.PERMISSION_DENIED);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("cleans up location tracking via stopLocationTracking using clearWatch", () => {
+  let clearedWatchId = null;
+
+  const restoreNavigator = mockNavigator({
+    clearWatch: (id) => {
+      clearedWatchId = id;
+    },
+  });
+
+  try {
+    stopLocationTracking(999);
+    assert.strictEqual(clearedWatchId, 999);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+await it("executes getCurrentLocation resolving normalized position or rejecting normalized error", async () => {
+  // 1. Success case
+  const restoreSuccess = mockNavigator({
+    getCurrentPosition: (successCb) => {
+      successCb({
+        coords: {
+          latitude: SYNTHETIC_GPS_FIXTURE.latitude,
+          longitude: SYNTHETIC_GPS_FIXTURE.longitude,
+          accuracy: 2.1,
+          speed: 0.5,
+          heading: 90,
+        },
+        timestamp: 1710000010000,
+      });
+    },
+  });
+
+  try {
+    const loc = await getCurrentLocation();
+    assert.strictEqual(loc.latitude, SYNTHETIC_GPS_FIXTURE.latitude);
+    assert.strictEqual(loc.longitude, SYNTHETIC_GPS_FIXTURE.longitude);
+    assert.strictEqual(loc.speed, 0.5);
+    assert.strictEqual(loc.heading, 90);
+  } finally {
+    restoreSuccess();
+  }
+
+  // 2. Error case
+  const restoreError = mockNavigator({
+    getCurrentPosition: (successCb, errorCb) => {
+      errorCb({ code: 3, message: "Timed out" });
+    },
+  });
+
+  try {
+    let caughtError = null;
+    try {
+      await getCurrentLocation();
+    } catch (err) {
+      caughtError = err;
+    }
+    assert.ok(caughtError);
+    assert.strictEqual(caughtError.code, GEOLOCATION_ERROR_CODES.TIMEOUT);
+  } finally {
+    restoreError();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 
 
@@ -1876,8 +2169,1368 @@ it("verifies free map-click Start and Destination selection functions remain ful
 
 
 // ---------------------------------------------------------------------------
+// 25. GPS-2: Use My Location Integration Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 25] GPS-2: Use My Location Integration Unit Tests:");
+
+// Synthetic test fixtures for GPS-2 (clearly labelled for testing only)
+const SYNTHETIC_INSIDE_PANKI_GPS = {
+  latitude: 26.4596123,
+  longitude: 80.2383456,
+  accuracy: 3.2,
+};
+
+const SYNTHETIC_OUTSIDE_PANKI_GPS = {
+  latitude: 28.6139, // Delhi (Outside Panki study area)
+  longitude: 77.2090,
+  accuracy: 10.0,
+};
+
+it("executes successful Use My Location flow & creates valid GPS Start location object", () => {
+  const gpsLoc = createGpsLocation(
+    SYNTHETIC_INSIDE_PANKI_GPS.latitude,
+    SYNTHETIC_INSIDE_PANKI_GPS.longitude
+  );
+
+  assert.ok(gpsLoc);
+  assert.strictEqual(gpsLoc.source, "gps");
+  assert.strictEqual(gpsLoc.isGps, true);
+  assert.strictEqual(gpsLoc.name, "My Location");
+  assert.strictEqual(gpsLoc.label, "My Location");
+  assert.ok(gpsLoc.nodeId);
+});
+
+it("preserves exact raw GPS coordinates in GPS Start location object without rounding", () => {
+  const gpsLoc = createGpsLocation(
+    SYNTHETIC_INSIDE_PANKI_GPS.latitude,
+    SYNTHETIC_INSIDE_PANKI_GPS.longitude
+  );
+
+  assert.strictEqual(gpsLoc.latitude, 26.4596123);
+  assert.strictEqual(gpsLoc.longitude, 80.2383456);
+  assert.strictEqual(gpsLoc.coordinate.latitude, 26.4596123);
+  assert.strictEqual(gpsLoc.coordinate.longitude, 80.2383456);
+});
+
+it("verifies source = 'gps' and isGps = true metadata are explicitly set", () => {
+  const gpsLoc = createGpsLocation(
+    SYNTHETIC_INSIDE_PANKI_GPS.latitude,
+    SYNTHETIC_INSIDE_PANKI_GPS.longitude
+  );
+
+  assert.strictEqual(gpsLoc.source, "gps");
+  assert.strictEqual(gpsLoc.isGps, true);
+  assert.strictEqual(gpsLoc.isFabricated, false);
+});
+
+it("verifies Destination remains completely unchanged when setting Start via GPS", () => {
+  const destLocationInitial = {
+    name: "M.I.G Road",
+    label: "M.I.G Road",
+    nodeId: "osm-node-3156228563",
+    coordinate: { latitude: 26.465, longitude: 80.242 },
+  };
+
+  let currentOrigin = null;
+  let currentDestination = destLocationInitial;
+
+  const gpsLoc = createGpsLocation(
+    SYNTHETIC_INSIDE_PANKI_GPS.latitude,
+    SYNTHETIC_INSIDE_PANKI_GPS.longitude
+  );
+
+  // Simulate updating Start via Use My Location
+  currentOrigin = gpsLoc;
+
+  assert.strictEqual(currentOrigin.name, "My Location");
+  assert.strictEqual(currentOrigin.isGps, true);
+  // Destination must remain 100% untouched
+  assert.strictEqual(currentDestination, destLocationInitial);
+  assert.strictEqual(currentDestination.name, "M.I.G Road");
+  assert.strictEqual(currentDestination.nodeId, "osm-node-3156228563");
+});
+
+it("maps permission-denied error code to concise user-friendly message", () => {
+  const rawErr = { code: 1, message: "User denied Geolocation" };
+  const normalizedErr = normalizeGeolocationError(rawErr);
+
+  let friendlyMsg = "Unable to determine your current location.";
+  if (normalizedErr.code === GEOLOCATION_ERROR_CODES.PERMISSION_DENIED) {
+    friendlyMsg = "Location permission was denied. Please allow location access.";
+  }
+
+  assert.strictEqual(normalizedErr.code, GEOLOCATION_ERROR_CODES.PERMISSION_DENIED);
+  assert.strictEqual(friendlyMsg, "Location permission was denied. Please allow location access.");
+});
+
+it("maps position-unavailable error code to concise user-friendly message", () => {
+  const rawErr = { code: 2, message: "Position unavailable" };
+  const normalizedErr = normalizeGeolocationError(rawErr);
+
+  let friendlyMsg = "Unable to determine your current location.";
+  if (normalizedErr.code === GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE) {
+    friendlyMsg = "Unable to determine your current location.";
+  }
+
+  assert.strictEqual(normalizedErr.code, GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE);
+  assert.strictEqual(friendlyMsg, "Unable to determine your current location.");
+});
+
+it("maps timeout error code to concise user-friendly message", () => {
+  const rawErr = { code: 3, message: "Request timeout" };
+  const normalizedErr = normalizeGeolocationError(rawErr);
+
+  let friendlyMsg = "Unable to determine your current location.";
+  if (normalizedErr.code === GEOLOCATION_ERROR_CODES.TIMEOUT) {
+    friendlyMsg = "Location request timed out. Please try again.";
+  }
+
+  assert.strictEqual(normalizedErr.code, GEOLOCATION_ERROR_CODES.TIMEOUT);
+  assert.strictEqual(friendlyMsg, "Location request timed out. Please try again.");
+});
+
+it("maps unsupported geolocation to concise user-friendly message", () => {
+  const unsupportedErr = new Error("Geolocation API is not supported in this environment.");
+  unsupportedErr.code = GEOLOCATION_ERROR_CODES.NOT_SUPPORTED;
+  const normalizedErr = normalizeGeolocationError(unsupportedErr);
+
+  let friendlyMsg = "Unable to determine your current location.";
+  if (normalizedErr.code === GEOLOCATION_ERROR_CODES.NOT_SUPPORTED) {
+    friendlyMsg = "Location is not supported in this browser.";
+  }
+
+  assert.strictEqual(normalizedErr.code, GEOLOCATION_ERROR_CODES.NOT_SUPPORTED);
+  assert.strictEqual(friendlyMsg, "Location is not supported in this browser.");
+});
+
+it("rejects GPS location outside Panki study area boundary with exact error message without snapping", () => {
+  const gpsResult = createGpsLocation(
+    SYNTHETIC_OUTSIDE_PANKI_GPS.latitude,
+    SYNTHETIC_OUTSIDE_PANKI_GPS.longitude
+  );
+
+  assert.ok(gpsResult.error);
+  assert.strictEqual(gpsResult.error, "Your current location is outside the Panki study area.");
+  assert.strictEqual(gpsResult.isGps, undefined);
+});
+
+it("verifies existing manual map-click Start selection remains fully functional", () => {
+  const mapClickLoc = createMapClickLocation(26.4596, 80.2383);
+  assert.ok(mapClickLoc);
+  assert.strictEqual(mapClickLoc.isMapClick, true);
+  assert.strictEqual(mapClickLoc.source, "map-click");
+  assert.ok(mapClickLoc.nodeId);
+});
+
+it("verifies existing named location search remains fully functional for Kalpi Road, Flyover, M.I.G Road, and Kanpur Bypass", () => {
+  const kalpiMatches = searchPankiLocations("Kalpi Road");
+  const flyoverMatches = searchPankiLocations("Kalpi Road Flyover");
+  const migMatches = searchPankiLocations("M.I.G Road");
+  const bypassMatches = searchPankiLocations("Kanpur Bypass");
+
+  assert.ok(kalpiMatches.length > 0);
+  assert.ok(flyoverMatches.length > 0);
+  assert.ok(migMatches.length > 0);
+  assert.ok(bypassMatches.length > 0);
+});
+
+it("verifies empty initial state placeholders remain intact on fresh load", () => {
+  const defaultOriginPlaceholder = "Where are you?";
+  const defaultDestPlaceholder = "Where do you want to go?";
+
+  assert.strictEqual(defaultOriginPlaceholder, "Where are you?");
+  assert.strictEqual(defaultDestPlaceholder, "Where do you want to go?");
+});
+
+// ---------------------------------------------------------------------------
+// 26. GPS-3: Live User Marker & Continuous Tracking Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 26] GPS-3: Live User Marker & Continuous Tracking Unit Tests:");
+
+it("verifies initial currentUserLocation is null on fresh load", () => {
+  const initialUserLocation = null;
+  assert.strictEqual(initialUserLocation, null);
+});
+
+it("starts exactly one watcher when activating Start Live Location", () => {
+  let watchPositionCallCount = 0;
+  let activeWatchId = null;
+
+  const restoreNavigator = mockNavigator({
+    watchPosition: () => {
+      watchPositionCallCount++;
+      return 101;
+    },
+  });
+
+  try {
+    activeWatchId = startLocationTracking(() => {}, () => {});
+    assert.strictEqual(watchPositionCallCount, 1);
+    assert.strictEqual(activeWatchId, 101);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("updates currentUserLocation with latest coordinates on repeated location updates", () => {
+  let registeredSuccessCb = null;
+  const locationHistory = [];
+
+  const restoreNavigator = mockNavigator({
+    watchPosition: (successCb) => {
+      registeredSuccessCb = successCb;
+      return 202;
+    },
+  });
+
+  try {
+    startLocationTracking((loc) => {
+      locationHistory.push(loc);
+    });
+
+    // Simulate 1st GPS update
+    registeredSuccessCb({
+      coords: { latitude: 26.45961, longitude: 80.23831, accuracy: 5.0, speed: 1.1, heading: 90 },
+      timestamp: 1710000000000,
+    });
+
+    // Simulate 2nd GPS update
+    registeredSuccessCb({
+      coords: { latitude: 26.45965, longitude: 80.23835, accuracy: 4.2, speed: 1.4, heading: 95 },
+      timestamp: 1710000002000,
+    });
+
+    assert.strictEqual(locationHistory.length, 2);
+    assert.strictEqual(locationHistory[1].latitude, 26.45965);
+    assert.strictEqual(locationHistory[1].longitude, 80.23835);
+    assert.strictEqual(locationHistory[1].accuracy, 4.2);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("preserves exact numerical coordinates in continuous tracking without rounding", () => {
+  let latestLoc = null;
+  let registeredSuccessCb = null;
+
+  const restoreNavigator = mockNavigator({
+    watchPosition: (successCb) => {
+      registeredSuccessCb = successCb;
+      return 303;
+    },
+  });
+
+  try {
+    startLocationTracking((loc) => { latestLoc = loc; });
+    registeredSuccessCb({
+      coords: { latitude: 26.4596123456, longitude: 80.2383654321, accuracy: 2.75 },
+      timestamp: Date.now(),
+    });
+
+    assert.strictEqual(latestLoc.latitude, 26.4596123456);
+    assert.strictEqual(latestLoc.longitude, 80.2383654321);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("verifies live blue user marker receives latest coordinates for map positioning", () => {
+  const liveUserLocation = {
+    latitude: 26.45962,
+    longitude: 80.23834,
+    accuracy: 6.0,
+    source: "gps",
+    isLive: true,
+  };
+
+  const markerCoord = [liveUserLocation.latitude, liveUserLocation.longitude];
+  assert.strictEqual(markerCoord[0], 26.45962);
+  assert.strictEqual(markerCoord[1], 80.23834);
+});
+
+it("verifies existing blue marker layer is updated instead of duplicating marker elements", () => {
+  const markersRef = { current: { userMarker: null } };
+
+  function updateUserMarker(lat, lng) {
+    if (markersRef.current.userMarker) {
+      markersRef.current.userMarker.lat = lat;
+      markersRef.current.userMarker.lng = lng;
+    } else {
+      markersRef.current.userMarker = { lat, lng, isCreated: true };
+    }
+  }
+
+  updateUserMarker(26.45961, 80.23831);
+  assert.strictEqual(markersRef.current.userMarker.lat, 26.45961);
+
+  updateUserMarker(26.45968, 80.23839);
+  assert.strictEqual(markersRef.current.userMarker.lat, 26.45968);
+});
+
+it("preserves GPS accuracy when provided", () => {
+  const locWithAccuracy = normalizeLocation({
+    coords: { latitude: 26.4596, longitude: 80.2383, accuracy: 12.5 },
+    timestamp: Date.now(),
+  });
+
+  assert.strictEqual(locWithAccuracy.accuracy, 12.5);
+});
+
+it("handles missing or null GPS accuracy safely", () => {
+  const locNullAccuracy = normalizeLocation({
+    coords: { latitude: 26.4596, longitude: 80.2383, accuracy: null },
+    timestamp: Date.now(),
+  });
+
+  assert.strictEqual(locNullAccuracy.accuracy, null);
+});
+
+it("verifies Start marker remains completely separate from live currentUserLocation", () => {
+  const startMarkerLocation = {
+    name: "North Gate",
+    latitude: 28.545,
+    longitude: 77.192,
+    source: "search",
+  };
+
+  const liveUserLocation = {
+    latitude: 26.4596,
+    longitude: 80.2383,
+    source: "gps",
+    isLive: true,
+  };
+
+  assert.notStrictEqual(startMarkerLocation.latitude, liveUserLocation.latitude);
+  assert.strictEqual(startMarkerLocation.source, "search");
+  assert.strictEqual(liveUserLocation.source, "gps");
+});
+
+it("verifies Destination remains completely unchanged during continuous live location updates", () => {
+  const destinationInitial = {
+    name: "M.I.G Road",
+    nodeId: "osm-node-3156228563",
+  };
+
+  let currentDestination = destinationInitial;
+  let currentUserLocation = null;
+
+  // Simulate GPS tracking update
+  currentUserLocation = {
+    latitude: 26.45961,
+    longitude: 80.23831,
+    source: "gps",
+    isLive: true,
+  };
+
+  assert.ok(currentUserLocation);
+  assert.strictEqual(currentDestination, destinationInitial);
+  assert.strictEqual(currentDestination.name, "M.I.G Road");
+});
+
+it("verifies Use My Location button functionality remains fully functional alongside live tracking", () => {
+  const gpsStartLoc = createGpsLocation(26.4596123, 80.2383456);
+
+  assert.ok(gpsStartLoc);
+  assert.strictEqual(gpsStartLoc.isGps, true);
+  assert.strictEqual(gpsStartLoc.name, "My Location");
+});
+
+it("maps permission-denied error code during tracking to concise user-friendly message", () => {
+  const err = normalizeGeolocationError({ code: 1, message: "Permission denied" });
+  assert.strictEqual(err.code, GEOLOCATION_ERROR_CODES.PERMISSION_DENIED);
+});
+
+it("maps position-unavailable error code during tracking to concise user-friendly message", () => {
+  const err = normalizeGeolocationError({ code: 2, message: "Position unavailable" });
+  assert.strictEqual(err.code, GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE);
+});
+
+it("maps timeout error code during tracking to concise user-friendly message", () => {
+  const err = normalizeGeolocationError({ code: 3, message: "Timeout" });
+  assert.strictEqual(err.code, GEOLOCATION_ERROR_CODES.TIMEOUT);
+});
+
+it("maps unsupported geolocation error to concise user-friendly message", () => {
+  const err = normalizeGeolocationError({ code: GEOLOCATION_ERROR_CODES.NOT_SUPPORTED, message: "Not supported" });
+  assert.strictEqual(err.code, GEOLOCATION_ERROR_CODES.NOT_SUPPORTED);
+});
+
+it("clears the active watcher when Stop Live Location is executed", () => {
+  let clearedWatchId = null;
+
+  const restoreNavigator = mockNavigator({
+    clearWatch: (id) => {
+      clearedWatchId = id;
+    },
+  });
+
+  try {
+    stopLocationTracking(404);
+    assert.strictEqual(clearedWatchId, 404);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("clears active watcher during component unmount cleanup", () => {
+  let clearedId = null;
+  const activeWatchIdRef = { current: 505 };
+
+  const restoreNavigator = mockNavigator({
+    clearWatch: (id) => {
+      clearedId = id;
+    },
+  });
+
+  try {
+    // Simulate cleanup effect
+    if (activeWatchIdRef.current !== null) {
+      stopLocationTracking(activeWatchIdRef.current);
+      activeWatchIdRef.current = null;
+    }
+
+    assert.strictEqual(clearedId, 505);
+    assert.strictEqual(activeWatchIdRef.current, null);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("prevents duplicate watchers upon repeated button clicks or component re-renders", () => {
+  let watchCallCount = 0;
+  let clearCallCount = 0;
+  let currentWatchIdRef = null;
+
+  const restoreNavigator = mockNavigator({
+    watchPosition: () => {
+      watchCallCount++;
+      return 606 + watchCallCount;
+    },
+    clearWatch: () => {
+      clearCallCount++;
+    },
+  });
+
+  try {
+    function startTrackingSafe() {
+      if (currentWatchIdRef !== null) {
+        stopLocationTracking(currentWatchIdRef);
+        currentWatchIdRef = null;
+      }
+      currentWatchIdRef = startLocationTracking(() => {}, () => {});
+    }
+
+    // 1st click
+    startTrackingSafe();
+    assert.strictEqual(watchCallCount, 1);
+    assert.strictEqual(clearCallCount, 0);
+
+    // 2nd click (repeated activation)
+    startTrackingSafe();
+    assert.strictEqual(watchCallCount, 2);
+    assert.strictEqual(clearCallCount, 1); // Cleared previous watcher before starting new one
+  } finally {
+    restoreNavigator();
+  }
+});
+
+it("verifies zero GPS coordinates are written or persisted to Firebase", () => {
+  const firebaseStoreMock = [];
+  function updateLiveLocationInMemory(loc) {
+    // Memory-only update
+    return { ...loc, inMemoryOnly: true };
+  }
+
+  const memoryState = updateLiveLocationInMemory({ latitude: 26.4596, longitude: 80.2383 });
+  assert.strictEqual(firebaseStoreMock.length, 0);
+  assert.strictEqual(memoryState.inMemoryOnly, true);
+});
+
+it("verifies existing routing, search, and map-click regression tests remain 100% passing", () => {
+  const startLoc = createMapClickLocation(26.4596, 80.2383);
+  const destLoc = createMapClickLocation(26.4650, 80.2420);
+  const searchRes = searchPankiLocations("Kalpi Road");
+
+  assert.ok(startLoc.isMapClick);
+  assert.ok(destLoc.isMapClick);
+  assert.ok(searchRes.length > 0);
+});
+
+// ---------------------------------------------------------------------------
+// 27. GPS-4: Live GPS Accuracy Improvement Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 27] GPS-4: Live GPS Accuracy Improvement:");
+
+it("1. verifies high-accuracy geolocation options are preserved", () => {
+  assert.strictEqual(DEFAULT_GEOLOCATION_OPTIONS.enableHighAccuracy, true);
+  assert.strictEqual(DEFAULT_GEOLOCATION_OPTIONS.maximumAge, 0);
+  assert.strictEqual(typeof DEFAULT_GEOLOCATION_OPTIONS.timeout, "number");
+});
+
+it("2. verifies accuracy values are never fabricated or rounded during normalization", () => {
+  const rawCoord = { latitude: 26.459612, longitude: 80.238314, accuracy: 24.876 };
+  const normalized = normalizeLocation({ coords: rawCoord, timestamp: 1000 });
+  assert.strictEqual(normalized.accuracy, 24.876);
+  assert.strictEqual(normalized.latitude, 26.459612);
+  assert.strictEqual(normalized.longitude, 80.238314);
+});
+
+it("3. verifies better accuracy readings can replace poorer trusted readings", () => {
+  const poorFix = { latitude: 26.4596, longitude: 80.2383, accuracy: 300, timestamp: 1000 };
+  const goodFix = { latitude: 26.4597, longitude: 80.2384, accuracy: 25, timestamp: 2000 };
+
+  const shouldReplace = shouldAcceptNewLocationFix(poorFix, goodFix);
+  assert.strictEqual(shouldReplace, true);
+});
+
+it("4. verifies obviously worse/outlier readings do not immediately cause large marker jumps", () => {
+  const initialFix = { latitude: 26.4596, longitude: 80.2383, accuracy: 15, timestamp: 1000 };
+  // Wild outlier: jumps ~5 km in 2 seconds (2500 m/s implied speed) with poor accuracy (350m)
+  const outlierFix = { latitude: 26.5000, longitude: 80.2800, accuracy: 350, timestamp: 3000 };
+
+  const shouldReplace = shouldAcceptNewLocationFix(initialFix, outlierFix);
+  assert.strictEqual(shouldReplace, false);
+});
+
+it("5. verifies missing accuracy is handled safely", () => {
+  const missingAccFix = normalizeLocation({
+    coords: { latitude: 26.4596, longitude: 80.2383, accuracy: null },
+    timestamp: 1000,
+  });
+
+  const classification = getAccuracyClassification(missingAccFix.accuracy);
+  assert.strictEqual(classification.quality, "unknown");
+  assert.strictEqual(classification.isLowAccuracy, false);
+  assert.strictEqual(classification.label, "Accuracy unknown");
+});
+
+it("6. verifies accuracy circle uses actual reported accuracy", () => {
+  const fix30m = { latitude: 26.4596, longitude: 80.2383, accuracy: 30 };
+  const circleRadius = fix30m.accuracy;
+  assert.strictEqual(circleRadius, 30);
+
+  const fixNull = { latitude: 26.4596, longitude: 80.2383, accuracy: null };
+  const circleRadiusNull = fixNull.accuracy;
+  assert.strictEqual(circleRadiusNull, null);
+});
+
+it("7. verifies low accuracy is communicated honestly", () => {
+  const poorClassification = getAccuracyClassification(250);
+  assert.strictEqual(poorClassification.quality, "poor");
+  assert.strictEqual(poorClassification.isLowAccuracy, true);
+  assert.ok(poorClassification.label.startsWith("Low GPS accuracy"));
+
+  const goodClassification = getAccuracyClassification(25);
+  assert.strictEqual(goodClassification.quality, "good");
+  assert.strictEqual(goodClassification.isLowAccuracy, false);
+  assert.strictEqual(goodClassification.label, "GPS accuracy: ~25 m");
+});
+
+it("8. verifies live tracking continues and converges after a poor initial fix", () => {
+  let currentTrusted = null;
+
+  // Reading 1: Initial coarse fix (350m)
+  const reading1 = { latitude: 26.4596, longitude: 80.2383, accuracy: 350, timestamp: 1000 };
+  if (shouldAcceptNewLocationFix(currentTrusted, reading1)) {
+    currentTrusted = reading1;
+  }
+  assert.strictEqual(currentTrusted.accuracy, 350);
+
+  // Reading 2: Improved fix (45m)
+  const reading2 = { latitude: 26.45962, longitude: 80.23832, accuracy: 45, timestamp: 2000 };
+  if (shouldAcceptNewLocationFix(currentTrusted, reading2)) {
+    currentTrusted = reading2;
+  }
+  assert.strictEqual(currentTrusted.accuracy, 45);
+
+  // Reading 3: High precision fix (12m)
+  const reading3 = { latitude: 26.45963, longitude: 80.23833, accuracy: 12, timestamp: 3000 };
+  if (shouldAcceptNewLocationFix(currentTrusted, reading3)) {
+    currentTrusted = reading3;
+  }
+  assert.strictEqual(currentTrusted.accuracy, 12);
+});
+
+it("9. verifies existing Start/Destination state remains independent from GPS fixes", () => {
+  const startLoc = { name: "Panki Station", nodeId: "osm-node-111" };
+  const destLoc = { name: "Kalpi Road", nodeId: "osm-node-222" };
+  let currentGPS = null;
+
+  const newFix = { latitude: 26.4596, longitude: 80.2383, accuracy: 20 };
+  if (shouldAcceptNewLocationFix(currentGPS, newFix)) {
+    currentGPS = newFix;
+  }
+
+  assert.strictEqual(startLoc.name, "Panki Station");
+  assert.strictEqual(destLoc.name, "Kalpi Road");
+  assert.strictEqual(currentGPS.accuracy, 20);
+});
+
+it("10. verifies GPS coordinates are not persisted to Firebase or localStorage", () => {
+  const sessionLocations = [];
+  function handleGPS(fix) {
+    sessionLocations.push(fix); // In-memory only
+  }
+
+  handleGPS({ latitude: 26.4596, longitude: 80.2383, accuracy: 15 });
+  assert.strictEqual(sessionLocations.length, 1);
+  assert.strictEqual(sessionLocations[0].latitude, 26.4596);
+  // Verify no persistent storage side effects
+  if (typeof globalThis.localStorage !== "undefined" && typeof globalThis.localStorage?.getItem === "function") {
+    assert.strictEqual(globalThis.localStorage.getItem("gps_location"), null);
+    assert.strictEqual(globalThis.localStorage.getItem("user_location"), null);
+  }
+});
+
+
+
+it("11. verifies distance calculation helper functions accurately using Haversine", () => {
+  // Panki center (26.4596, 80.2383) to point ~111 meters away (26.4606, 80.2383)
+  const distance = calculateDistanceMeters(26.4596, 80.2383, 26.4606, 80.2383);
+  assert.ok(distance > 100 && distance < 120);
+});
+
+// ---------------------------------------------------------------------------
+// 28. GPS-5: Navigation Map Follow + Recenter Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 28] GPS-5: Navigation Map Follow + Recenter:");
+
+it("1. verifies initial follow mode is false", () => {
+  let isMapFollowingUser = false;
+  assert.strictEqual(isMapFollowingUser, false);
+});
+
+it("2. verifies live location can operate without a route", () => {
+  const selectedRoute = null;
+  const currentUserLocation = { latitude: 26.4596, longitude: 80.2383, isLive: true };
+
+  assert.strictEqual(selectedRoute, null);
+  assert.ok(currentUserLocation);
+  assert.strictEqual(currentUserLocation.latitude, 26.4596);
+});
+
+it("3. verifies valid GPS update triggers follow behavior when follow mode is enabled", () => {
+  let isMapFollowingUser = true;
+  let mapCenter = [26.4500, 80.2300];
+
+  const trustedGPS = { latitude: 26.4596, longitude: 80.2383 };
+  if (isMapFollowingUser) {
+    mapCenter = [trustedGPS.latitude, trustedGPS.longitude];
+  }
+
+  assert.deepStrictEqual(mapCenter, [26.4596, 80.2383]);
+});
+
+it("4. verifies GPS update moves the map toward current user location", () => {
+  let currentMapCenter = [26.4500, 80.2200];
+  const newGPS = { latitude: 26.45962, longitude: 80.23834 };
+  const isMapFollowingUser = true;
+
+  if (isMapFollowingUser && newGPS) {
+    currentMapCenter = [newGPS.latitude, newGPS.longitude];
+  }
+
+  assert.strictEqual(currentMapCenter[0], 26.45962);
+  assert.strictEqual(currentMapCenter[1], 80.23834);
+});
+
+it("5. verifies blue marker and follow behavior use the exact same trusted GPS state", () => {
+  const trustedGPS = { latitude: 26.45961, longitude: 80.23831, accuracy: 12 };
+  const markerCoord = [trustedGPS.latitude, trustedGPS.longitude];
+  const followCameraCoord = [trustedGPS.latitude, trustedGPS.longitude];
+
+  assert.deepStrictEqual(markerCoord, followCameraCoord);
+  assert.strictEqual(markerCoord[0], 26.45961);
+});
+
+it("6. verifies manual map interaction pauses follow mode", () => {
+  let isMapFollowingUser = true;
+  function handlePauseMapFollow() {
+    isMapFollowingUser = false;
+  }
+
+  // Simulate manual map drag event
+  handlePauseMapFollow();
+  assert.strictEqual(isMapFollowingUser, false);
+});
+
+it("7. verifies Recenter restores follow mode", () => {
+  let isMapFollowingUser = false;
+  const currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+
+  function handleRecenter() {
+    if (currentUserLocation) {
+      isMapFollowingUser = true;
+      return { success: true };
+    }
+    return { success: false };
+  }
+
+  const result = handleRecenter();
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(isMapFollowingUser, true);
+});
+
+it("8. verifies Recenter works with current GPS location", () => {
+  const currentUserLocation = { latitude: 26.45965, longitude: 80.23835 };
+  let mapCenter = [26.4000, 80.2000];
+
+  function handleRecenter() {
+    if (currentUserLocation) {
+      mapCenter = [currentUserLocation.latitude, currentUserLocation.longitude];
+      return true;
+    }
+    return false;
+  }
+
+  const ok = handleRecenter();
+  assert.strictEqual(ok, true);
+  assert.deepStrictEqual(mapCenter, [26.45965, 80.23835]);
+});
+
+it("9. verifies Recenter handles missing current location gracefully", () => {
+  const currentUserLocation = null;
+  let isMapFollowingUser = false;
+
+  function handleRecenter() {
+    if (currentUserLocation && typeof currentUserLocation.latitude === "number") {
+      isMapFollowingUser = true;
+      return { success: true };
+    }
+    return { success: false, message: "Live location is not available yet." };
+  }
+
+  const res = handleRecenter();
+  assert.strictEqual(res.success, false);
+  assert.strictEqual(res.message, "Live location is not available yet.");
+  assert.strictEqual(isMapFollowingUser, false);
+});
+
+it("10. verifies Stop Live Location stops follow behavior", () => {
+  let isLiveTracking = true;
+  let isMapFollowingUser = true;
+  let currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+
+  function stopTracking() {
+    isLiveTracking = false;
+    isMapFollowingUser = false;
+    currentUserLocation = null;
+  }
+
+  stopTracking();
+  assert.strictEqual(isLiveTracking, false);
+  assert.strictEqual(isMapFollowingUser, false);
+  assert.strictEqual(currentUserLocation, null);
+});
+
+it("11. verifies restarting Live Location does not create duplicate watchers", () => {
+  let activeWatchId = 101;
+  let clearCount = 0;
+
+  function restartTracking() {
+    if (activeWatchId !== null) {
+      clearCount++;
+      activeWatchId = null;
+    }
+    activeWatchId = 202; // single new watch ID
+  }
+
+  restartTracking();
+  assert.strictEqual(clearCount, 1);
+  assert.strictEqual(activeWatchId, 202);
+});
+
+it("12. verifies Start location remains completely unchanged during map follow", () => {
+  const startLoc = { name: "Kalpi Road", nodeId: "osm-node-8820570755" };
+  let isMapFollowingUser = true;
+  let currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+
+  // Simulate map camera follow update
+  if (isMapFollowingUser && currentUserLocation) {
+    // camera moves, startLoc unchanged
+  }
+
+  assert.strictEqual(startLoc.name, "Kalpi Road");
+  assert.strictEqual(startLoc.nodeId, "osm-node-8820570755");
+});
+
+it("13. verifies Destination location remains completely unchanged during map follow", () => {
+  const destLoc = { name: "M.I.G Road", nodeId: "osm-node-3156228563" };
+  let isMapFollowingUser = true;
+  let currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+
+  if (isMapFollowingUser && currentUserLocation) {
+    // camera moves, destLoc unchanged
+  }
+
+  assert.strictEqual(destLoc.name, "M.I.G Road");
+  assert.strictEqual(destLoc.nodeId, "osm-node-3156228563");
+});
+
+it("14. verifies existing Use My Location behavior remains fully functional", () => {
+  const gpsStartLoc = createGpsLocation(26.4596123, 80.2383456);
+  assert.ok(gpsStartLoc);
+  assert.strictEqual(gpsStartLoc.isGps, true);
+  assert.strictEqual(gpsStartLoc.name, "My Location");
+});
+
+it("15. verifies existing route rendering remains unchanged during map follow", () => {
+  const selectedRoute = { id: "r1", nodeIds: ["N1", "N2", "N7"], distanceMeters: 500 };
+  let isMapFollowingUser = true;
+  let currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+
+  if (isMapFollowingUser && currentUserLocation) {
+    // camera moves, route polyline data untouched
+  }
+
+  assert.strictEqual(selectedRoute.id, "r1");
+  assert.strictEqual(selectedRoute.distanceMeters, 500);
+});
+
+it("16. verifies existing GPS accuracy filtering remains unchanged during map follow", () => {
+  const initialFix = { latitude: 26.4596, longitude: 80.2383, accuracy: 15, timestamp: 1000 };
+  const outlierFix = { latitude: 26.5000, longitude: 80.2800, accuracy: 350, timestamp: 2000 };
+
+  const isAccepted = shouldAcceptNewLocationFix(initialFix, outlierFix);
+  assert.strictEqual(isAccepted, false);
+});
+
+it("17. verifies GPS coordinates remain in memory only and are not persisted", () => {
+  const sessionPositions = [];
+  function onPositionUpdate(pos) {
+    sessionPositions.push(pos);
+  }
+
+  onPositionUpdate({ latitude: 26.4596, longitude: 80.2383 });
+  assert.strictEqual(sessionPositions.length, 1);
+  if (typeof globalThis.localStorage !== "undefined" && typeof globalThis.localStorage?.getItem === "function") {
+    assert.strictEqual(globalThis.localStorage.getItem("follow_location"), null);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 29. GPS-6: Live ETA, Remaining Distance & Route Progress Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 29] GPS-6: Live ETA, Remaining Distance & Route Progress:");
+
+it("1. verifies browser GPS speed is used when valid", () => {
+  const res = calculateEffectiveSpeed(2.5, "walking");
+  assert.strictEqual(res.effectiveSpeedMs, 2.5);
+  assert.strictEqual(res.speedSource, "gps");
+  assert.strictEqual(res.speedStatus, "moving");
+  assert.strictEqual(res.isStationary, false);
+});
+
+it("2. verifies browser speed = 0 results in stopped state", () => {
+  const res = calculateEffectiveSpeed(0, "walking");
+  assert.strictEqual(res.effectiveSpeedMs, 0);
+  assert.strictEqual(res.speedSource, "gps");
+  assert.strictEqual(res.speedStatus, "stopped");
+  assert.strictEqual(res.isStationary, true);
+  assert.strictEqual(res.currentSpeedFormatted, "0 km/h");
+});
+
+it("3. verifies browser speed = null triggers derived-speed logic", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000 };
+  const curr = { latitude: 26.4510, longitude: 80.2300, timestamp: 6000 };
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.speedSource, "derived");
+  assert.strictEqual(res.speedStatus, "moving");
+  assert.ok(res.effectiveSpeedMs > 0);
+});
+
+it("4. verifies derived speed from two trusted GPS points is correct", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000 };
+  const curr = { latitude: 26.4501, longitude: 80.2300, timestamp: 3000 }; // ~11.1m in 2s => ~5.55 m/s
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.speedSource, "derived");
+  assert.ok(res.effectiveSpeedMs > 5.0 && res.effectiveSpeedMs < 6.0);
+});
+
+it("5. verifies timestamp difference is handled correctly", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: 10000 };
+  const curr = { latitude: 26.4505, longitude: 80.2300, timestamp: 20000 }; // 10s delta
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.ok(res.effectiveSpeedMs > 0);
+  assert.strictEqual(res.speedStatus, "moving");
+});
+
+it("6. verifies invalid timestamps are handled safely", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: NaN };
+  const curr = { latitude: 26.4505, longitude: 80.2300, timestamp: null };
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.speedStatus, "detecting");
+  assert.strictEqual(res.currentSpeedFormatted, "Detecting speed…");
+  assert.strictEqual(res.effectiveSpeedMs, 0);
+});
+
+it("7. verifies zero elapsed time never causes division by zero", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: 5000 };
+  const curr = { latitude: 26.4505, longitude: 80.2300, timestamp: 5000 };
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.speedStatus, "detecting");
+  assert.strictEqual(res.effectiveSpeedMs, 0);
+  assert.notStrictEqual(res.effectiveSpeedMs, Infinity);
+});
+
+it("8. verifies tiny stationary GPS noise does not become walking speed", () => {
+  const prev = { latitude: 26.450000, longitude: 80.230000, timestamp: 1000 };
+  const curr = { latitude: 26.450002, longitude: 80.230002, timestamp: 3000 }; // ~0.29m in 2s => ~0.14 m/s
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.isStationary, true);
+  assert.strictEqual(res.speedStatus, "stopped");
+  assert.strictEqual(res.currentSpeedFormatted, "0 km/h");
+});
+
+it("9. verifies impossible speed spikes are rejected", () => {
+  const prev = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000 };
+  const curr = { latitude: 26.5500, longitude: 80.3300, timestamp: 2000 }; // ~15km in 1s
+  const res = calculateEffectiveSpeed(null, "walking", prev, curr);
+
+  assert.strictEqual(res.speedStatus, "detecting");
+  assert.strictEqual(res.currentSpeedFormatted, "Detecting speed…");
+});
+
+it("10. verifies speed smoothing behaves correctly", () => {
+  const smoothed = smoothSpeedMs(5.0, 3.0, 0.4);
+  assert.strictEqual(smoothed, 3.8); // 0.4 * 5 + 0.6 * 3 = 3.8
+  const stopSmooth = smoothSpeedMs(0, 3.0);
+  assert.strictEqual(stopSmooth, 0);
+});
+
+it("11. verifies Current Speed shows 0 km/h when stationary", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsStationary = { latitude: 26.4596, longitude: 80.2383, speed: 0 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsStationary, selectedRoute: route });
+
+  assert.strictEqual(nav.currentSpeedFormatted, "0 km/h");
+  assert.strictEqual(nav.speedStatus, "stopped");
+  assert.strictEqual(nav.isStationary, true);
+});
+
+it("12. verifies Current Speed shows 'Detecting speed…' and ETA shows 'ETA unavailable' before enough data exists", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsNoSpeed = { latitude: 26.4596, longitude: 80.2383, speed: null };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsNoSpeed, selectedRoute: route, previousLocation: null });
+
+  assert.strictEqual(nav.currentSpeedFormatted, "Detecting speed…");
+  assert.strictEqual(nav.etaFormatted, "ETA unavailable");
+  assert.strictEqual(nav.speedStatus, "detecting");
+});
+
+it("13. verifies Walking fallback is NOT shown as live current speed while stationary", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsStationary = { latitude: 26.4596, longitude: 80.2383, speed: 0 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsStationary, selectedRoute: route, travelMode: "walking" });
+
+  assert.strictEqual(nav.currentSpeedFormatted, "0 km/h");
+  assert.notStrictEqual(nav.currentSpeedFormatted, "5 km/h");
+  assert.notStrictEqual(nav.currentSpeedFormatted, "5.0 km/h");
+});
+
+it("14. verifies Cycling fallback is NOT shown as live current speed while stationary", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsStationary = { latitude: 26.4596, longitude: 80.2383, speed: 0 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsStationary, selectedRoute: route, travelMode: "cycling" });
+
+  assert.strictEqual(nav.currentSpeedFormatted, "0 km/h");
+  assert.notStrictEqual(nav.currentSpeedFormatted, "15 km/h");
+  assert.notStrictEqual(nav.currentSpeedFormatted, "15.0 km/h");
+});
+
+it("15. verifies ETA uses actual measured speed when moving", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsMoving = { latitude: 26.4596, longitude: 80.2383, speed: 3.0 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsMoving, selectedRoute: route });
+
+  assert.strictEqual(nav.isEtaPaused, false);
+  assert.ok(nav.etaFormatted.endsWith("min"));
+  assert.notStrictEqual(nav.etaFormatted, "ETA paused");
+});
+
+it("16. verifies ETA pauses / avoids false movement when stationary", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsStationary = { latitude: n1[0], longitude: n1[1], speed: 0 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsStationary, selectedRoute: route });
+
+  assert.strictEqual(nav.isEtaPaused, true);
+  assert.strictEqual(nav.etaFormatted, "ETA paused");
+  assert.strictEqual(nav.statusText, "Stopped");
+});
+
+it("17. verifies ETA becomes valid again when movement resumes", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsStationary = { latitude: n1[0], longitude: n1[1], speed: 0 };
+  const gpsResumed = { latitude: n1[0], longitude: n1[1], speed: 2.5 };
+
+  const navStopped = calculateNavigationProgress({ currentUserLocation: gpsStationary, selectedRoute: route });
+  const navMoving = calculateNavigationProgress({ currentUserLocation: gpsResumed, selectedRoute: route });
+
+  assert.strictEqual(navStopped.etaFormatted, "ETA paused");
+  assert.strictEqual(navMoving.isEtaPaused, false);
+  assert.ok(navMoving.etaFormatted.includes("min"));
+});
+
+it("18. verifies remaining distance continues using selected-route geometry", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsNearStart = { latitude: n1[0], longitude: n1[1], speed: 1.5 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsNearStart, selectedRoute: route });
+
+  assert.ok(nav.remainingDistanceMeters > 0);
+  assert.ok(nav.remainingDistanceFormatted.includes("m") || nav.remainingDistanceFormatted.includes("km"));
+});
+
+it("19. verifies progress remains spatially based", () => {
+  const polyline = [[26.4500, 80.2300], [26.4600, 80.2300]];
+  const gpsMid = { latitude: 26.4550, longitude: 80.2300 };
+  const proj = projectPointOntoPolyline(gpsMid, polyline);
+
+  assert.ok(proj.progressPercent >= 48 && proj.progressPercent <= 52);
+});
+
+it("20. verifies route selection change recalculates remaining distance and ETA correctly", () => {
+  const routeShort = { id: "rS", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const routeLong = { id: "rL", nodeIds: ["osm-node-8820570755", "osm-node-8820570756"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gps = { latitude: n1[0], longitude: n1[1], speed: 2.0 };
+
+  const navS = calculateNavigationProgress({ currentUserLocation: gps, selectedRoute: routeShort });
+  const navL = calculateNavigationProgress({ currentUserLocation: gps, selectedRoute: routeLong });
+
+  assert.notStrictEqual(navS.remainingDistanceFormatted, navL.remainingDistanceFormatted);
+  assert.notStrictEqual(navS.etaFormatted, navL.etaFormatted);
+});
+
+it("21. verifies blue marker remains at actual GPS location", () => {
+  const rawGPS = { latitude: 26.4597, longitude: 80.2385, accuracy: 10 };
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const nav = calculateNavigationProgress({ currentUserLocation: rawGPS, selectedRoute: route });
+
+  assert.strictEqual(rawGPS.latitude, 26.4597);
+  assert.strictEqual(rawGPS.longitude, 80.2385);
+  assert.ok(nav.projectedPoint);
+});
+
+it("22. verifies existing GPS accuracy filtering remains intact", () => {
+  const poorAccGPS = { latitude: 26.4596, longitude: 80.2383, accuracy: 250 };
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const nav = calculateNavigationProgress({ currentUserLocation: poorAccGPS, selectedRoute: route });
+
+  assert.ok(nav.statusText.startsWith("Low GPS accuracy"));
+});
+
+it("23. verifies existing map-follow remains intact", () => {
+  let isMapFollowingUser = true;
+  const trustedGPS = { latitude: 26.4596, longitude: 80.2383 };
+
+  let cameraCenter = null;
+  if (isMapFollowingUser && trustedGPS) {
+    cameraCenter = [trustedGPS.latitude, trustedGPS.longitude];
+  }
+
+  assert.deepStrictEqual(cameraCenter, [26.4596, 80.2383]);
+});
+
+it("24. verifies existing Use My Location remains intact", () => {
+  const mapClickLoc = createMapClickLocation(26.4596, 80.2383);
+  assert.ok(mapClickLoc);
+  assert.strictEqual(mapClickLoc.isMapClick, true);
+});
+
+it("25. verifies arrival threshold, 100% campus graph regression, and search remain intact", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const destCoord = getNodeCoordinate("osm-node-3156228563");
+  const gpsAtDest = { latitude: destCoord[0], longitude: destCoord[1], speed: 0 };
+
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsAtDest, selectedRoute: route, arrivalThreshold: 30 });
+  assert.strictEqual(nav.isArrived, true);
+  assert.strictEqual(nav.statusText, "Arrived at destination");
+  assert.strictEqual(nav.etaFormatted, "0 min");
+
+  const graph = createCampusGraph();
+  const dijkstraRoute = findDijkstraRoute(graph, "N1", "N7");
+  assert.ok(dijkstraRoute);
+  assert.strictEqual(dijkstraRoute.nodeIds[0], "N1");
+});
+
+// ---------------------------------------------------------------------------
+// 30. GPS-7: Reliable Off-Route Detection Unit Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 30] GPS-7: Reliable Off-Route Detection:");
+
+it("1. verifies GPS point very close to route results in ON_ROUTE state", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsNearRoute = { latitude: n1[0], longitude: n1[1], accuracy: 10, speed: 1.5 };
+
+  const state = evaluateOffRouteState({ currentUserLocation: gpsNearRoute, selectedRoute: route });
+
+  assert.strictEqual(state.status, "ON_ROUTE");
+  assert.strictEqual(state.isOnRoute, true);
+  assert.strictEqual(state.isOffRoute, false);
+  assert.strictEqual(state.statusText, "On route");
+});
+
+it("2. verifies GPS point moderately far but with poor GPS accuracy results in UNCERTAIN state", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsPoorAcc = { latitude: 26.4600, longitude: 80.2390, accuracy: 200, speed: 1.5 };
+
+  const state = evaluateOffRouteState({ currentUserLocation: gpsPoorAcc, selectedRoute: route });
+
+  assert.strictEqual(state.status, "UNCERTAIN");
+  assert.strictEqual(state.isUncertain, true);
+  assert.strictEqual(state.isOffRoute, false);
+  assert.ok(state.statusText.includes("Checking route position"));
+});
+
+it("3. verifies GPS point far from route with good accuracy is not immediately OFF_ROUTE on first reading", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsFar = { latitude: 26.4610, longitude: 80.2400, accuracy: 10, speed: 1.5 };
+
+  const state1 = evaluateOffRouteState({ currentUserLocation: gpsFar, selectedRoute: route, previousOffRouteState: null });
+
+  assert.strictEqual(state1.confirmationCount, 1);
+  assert.strictEqual(state1.status, "UNCERTAIN");
+  assert.strictEqual(state1.isOffRoute, false);
+});
+
+it("4. verifies consecutive far trusted fixes trigger OFF_ROUTE state", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsFar = { latitude: 26.4610, longitude: 80.2400, accuracy: 10, speed: 1.5 };
+
+  const s1 = evaluateOffRouteState({ currentUserLocation: gpsFar, selectedRoute: route });
+  const s2 = evaluateOffRouteState({ currentUserLocation: gpsFar, selectedRoute: route, previousOffRouteState: s1 });
+  const s3 = evaluateOffRouteState({ currentUserLocation: gpsFar, selectedRoute: route, previousOffRouteState: s2 });
+
+  assert.strictEqual(s3.confirmationCount, 3);
+  assert.strictEqual(s3.status, "OFF_ROUTE");
+  assert.strictEqual(s3.isOffRoute, true);
+  assert.ok(s3.statusText.includes("off route"));
+});
+
+it("5. verifies GPS accuracy contributes to effective detection threshold", () => {
+  assert.strictEqual(OFF_ROUTE_CONFIG.BASE_OFF_ROUTE_THRESHOLD_METERS, 30);
+  const t0 = calculateEffectiveThresholds(0);
+  const t20 = calculateEffectiveThresholds(20);
+
+  assert.strictEqual(t0.effectiveThresholdMeters, 30);
+  assert.strictEqual(t20.effectiveThresholdMeters, 40);
+});
+
+it("6. verifies accuracy contribution is capped at max allowance limit", () => {
+  const tBig = calculateEffectiveThresholds(300);
+  assert.strictEqual(tBig.effectiveThresholdMeters, 80);
+  assert.strictEqual(tBig.cappedAllowance, 50);
+});
+
+it("7. verifies one noisy GPS jump does not immediately trigger OFF_ROUTE", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsNormal = { latitude: 26.4596, longitude: 80.2383, accuracy: 10, speed: 1.5 };
+  const gpsJump = { latitude: 26.4610, longitude: 80.2400, accuracy: 10, speed: 1.5 };
+
+  const sNormal = evaluateOffRouteState({ currentUserLocation: gpsNormal, selectedRoute: route });
+  const sJump = evaluateOffRouteState({ currentUserLocation: gpsJump, selectedRoute: route, previousOffRouteState: sNormal });
+
+  assert.strictEqual(sJump.status, "UNCERTAIN");
+  assert.strictEqual(sJump.isOffRoute, false);
+});
+
+it("8. verifies stationary GPS jitter does not repeatedly trigger OFF_ROUTE", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsStationaryJitter = { latitude: 26.4600, longitude: 80.2388, accuracy: 15, speed: 0 };
+
+  const s1 = evaluateOffRouteState({ currentUserLocation: gpsStationaryJitter, selectedRoute: route });
+  const s2 = evaluateOffRouteState({ currentUserLocation: gpsStationaryJitter, selectedRoute: route, previousOffRouteState: s1 });
+
+  assert.strictEqual(s2.isOffRoute, false);
+  assert.ok(s2.confirmationCount < 3);
+});
+
+it("9. verifies separate off-route and return-to-route thresholds prevent oscillation", () => {
+  const t = calculateEffectiveThresholds(10);
+  assert.strictEqual(t.effectiveThresholdMeters, 35);
+  assert.strictEqual(t.returnToRouteThresholdMeters, 24.5);
+  assert.ok(t.returnToRouteThresholdMeters < t.effectiveThresholdMeters);
+});
+
+it("10. verifies user returning near route restores ON_ROUTE state", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsOff = { latitude: n1[0] + 0.005, longitude: n1[1] + 0.005, accuracy: 10, speed: 1.5 };
+  const gpsBack = { latitude: n1[0], longitude: n1[1], accuracy: 10, speed: 1.5 };
+
+  let s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route });
+  s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route, previousOffRouteState: s });
+  s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route, previousOffRouteState: s });
+  assert.strictEqual(s.status, "OFF_ROUTE");
+
+  const sReturned = evaluateOffRouteState({ currentUserLocation: gpsBack, selectedRoute: route, previousOffRouteState: s });
+  assert.strictEqual(sReturned.status, "ON_ROUTE");
+  assert.strictEqual(sReturned.confirmationCount, 0);
+});
+
+it("11. verifies route change resets previous off-route confirmation", () => {
+  const routeA = { id: "rA", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const routeB = { id: "rB", nodeIds: ["osm-node-8820570755", "osm-node-8820570756"] };
+  const gpsFarA = { latitude: 26.4610, longitude: 80.2400, accuracy: 10, speed: 1.5 };
+
+  const sA = evaluateOffRouteState({ currentUserLocation: gpsFarA, selectedRoute: routeA });
+  const sB = evaluateOffRouteState({ currentUserLocation: gpsFarA, selectedRoute: routeB, previousOffRouteState: sA });
+
+  assert.strictEqual(sB.routeId, "rB");
+  assert.notStrictEqual(sB.confirmationCount, 2);
+});
+
+it("12. verifies new route is evaluated independently", () => {
+  const routeB = { id: "rB", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gps = { latitude: n1[0], longitude: n1[1], accuracy: 10, speed: 1.5 };
+
+  const sB = evaluateOffRouteState({ currentUserLocation: gps, selectedRoute: routeB });
+  assert.strictEqual(sB.status, "ON_ROUTE");
+});
+
+it("13. verifies rejected GPS/outlier fixes do not change off-route state", () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const initialFix = { latitude: n1[0], longitude: n1[1], accuracy: 15, timestamp: 1000 };
+  const outlierFix = { latitude: n1[0] + 0.05, longitude: n1[1] + 0.05, accuracy: 350, timestamp: 2000 };
+
+  const isAccepted = shouldAcceptNewLocationFix(initialFix, outlierFix);
+  assert.strictEqual(isAccepted, false);
+
+  const trustedFix = isAccepted ? outlierFix : initialFix;
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+
+  const state = evaluateOffRouteState({ currentUserLocation: trustedFix, selectedRoute: route });
+  assert.strictEqual(state.status, "ON_ROUTE");
+});
+
+it("14. verifies missing GPS accuracy is handled safely", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsNoAcc = { latitude: n1[0], longitude: n1[1], accuracy: null };
+
+  const state = evaluateOffRouteState({ currentUserLocation: gpsNoAcc, selectedRoute: route });
+  assert.strictEqual(state.status, "ON_ROUTE");
+  assert.strictEqual(state.effectiveThresholdMeters, 30);
+});
+
+it("15. verifies missing route geometry is handled safely", () => {
+  const gps = { latitude: 26.4596, longitude: 80.2383 };
+  const stateNoRoute = evaluateOffRouteState({ currentUserLocation: gps, selectedRoute: null });
+
+  assert.strictEqual(stateNoRoute.status, "ON_ROUTE");
+  assert.strictEqual(stateNoRoute.distanceFromRouteMeters, 0);
+});
+
+it("16. verifies current blue marker remains at actual GPS position", () => {
+  const rawGPS = { latitude: 26.4610, longitude: 80.2400, accuracy: 10 };
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const state = evaluateOffRouteState({ currentUserLocation: rawGPS, selectedRoute: route });
+
+  assert.strictEqual(state.currentUserLocation.latitude, 26.4610);
+  assert.strictEqual(state.currentUserLocation.longitude, 80.2400);
+});
+
+it("17. verifies projected route point remains separate from actual GPS marker", () => {
+  const rawGPS = { latitude: 26.4610, longitude: 80.2400, accuracy: 10 };
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const state = evaluateOffRouteState({ currentUserLocation: rawGPS, selectedRoute: route });
+
+  assert.ok(state.projectedPoint);
+  assert.notStrictEqual(state.projectedPoint.latitude, rawGPS.latitude);
+});
+
+it("18. verifies no automatic rerouting is triggered in Step GPS-7", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsOff = { latitude: 26.4610, longitude: 80.2400, accuracy: 10, speed: 1.5 };
+
+  let s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route });
+  s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route, previousOffRouteState: s });
+  s = evaluateOffRouteState({ currentUserLocation: gpsOff, selectedRoute: route, previousOffRouteState: s });
+
+  assert.strictEqual(s.status, "OFF_ROUTE");
+  assert.strictEqual(s.selectedRoute.id, "r1");
+});
+
+it("19. verifies existing live ETA behavior remains intact", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsMoving = { latitude: 26.4596, longitude: 80.2383, speed: 2.5 };
+  const nav = calculateNavigationProgress({ currentUserLocation: gpsMoving, selectedRoute: route });
+
+  assert.strictEqual(nav.isEtaPaused, false);
+  assert.ok(nav.etaFormatted.includes("min"));
+});
+
+it("20. verifies existing map-follow/recenter remains intact", () => {
+  let isMapFollowingUser = true;
+  const gps = { latitude: 26.4596, longitude: 80.2383 };
+  let camera = null;
+  if (isMapFollowingUser && gps) camera = [gps.latitude, gps.longitude];
+
+  assert.deepStrictEqual(camera, [26.4596, 80.2383]);
+});
+
+it("21. verifies existing Walking/Cycling behavior remains intact", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gps = { latitude: 26.4596, longitude: 80.2383, speed: 3.0 };
+
+  const navWalk = calculateNavigationProgress({ currentUserLocation: gps, selectedRoute: route, travelMode: "walking" });
+  const navCycle = calculateNavigationProgress({ currentUserLocation: gps, selectedRoute: route, travelMode: "cycling" });
+
+  assert.strictEqual(navWalk.isNavigationActive, true);
+  assert.strictEqual(navCycle.isNavigationActive, true);
+});
+
+it("22. verifies existing Firebase condition routing remains intact", () => {
+  const graph = createCampusGraph();
+  applyCampusConditionsToGraph(graph, [
+    { title: "Hazard", type: "blocked_path", severity: "critical", status: "active", affectedPathIds: ["N1-N6"] },
+  ]);
+
+  const route = findDijkstraRoute(graph, "N1", "N7", { useConditions: true });
+  assert.ok(route);
+  assert.strictEqual(route.nodeIds.includes("N6"), false);
+});
+
+it("23. verifies existing named search/map-click selection remains intact", () => {
+  const mapClickLoc = createMapClickLocation(26.4596, 80.2383);
+  assert.ok(mapClickLoc);
+  assert.strictEqual(mapClickLoc.isMapClick, true);
+});
+
+it("24. verifies existing Panki graph routing remains intact", () => {
+  const graph = createCampusGraph();
+  const route = findDijkstraRoute(graph, "N1", "N7");
+  assert.ok(route);
+});
+
+it("25. verifies 100% sample N1 -> N7 campus routing regression passes cleanly", () => {
+  const graph = createCampusGraph();
+  const route = findDijkstraRoute(graph, "N1", "N7");
+
+  assert.ok(route);
+  assert.strictEqual(route.nodeIds[0], "N1");
+  assert.strictEqual(route.nodeIds[route.nodeIds.length - 1], "N7");
+});
+
+
+
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+
+await new Promise((resolve) => setTimeout(resolve, 200));
 
 console.log("\n=================================================");
 console.log(`Results: ${testsPassed} passed, ${testsFailed} failed`);

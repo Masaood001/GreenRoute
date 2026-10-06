@@ -80,3 +80,40 @@ export {
 
 // Live Routing Integration Orchestration
 export { calculateLiveCampusRoutes } from "./routingIntegrationService.js";
+
+// Browser Geolocation Service
+export {
+  GEOLOCATION_ERROR_CODES,
+  DEFAULT_GEOLOCATION_OPTIONS,
+  normalizeLocation,
+  normalizeGeolocationError,
+  getCurrentLocation,
+  startLocationTracking,
+  stopLocationTracking,
+  getAccuracyClassification,
+  calculateDistanceMeters,
+  shouldAcceptNewLocationFix,
+} from "./geolocationService.js";
+
+// Live Navigation Progress & ETA Service
+export {
+  DEFAULT_TRAVEL_SPEEDS_MS,
+  DEFAULT_ARRIVAL_THRESHOLD_METERS,
+  STATIONARY_SPEED_THRESHOLD_MS,
+  MAX_REALISTIC_SPEED_MS,
+  projectPointToSegment,
+  projectPointOntoPolyline,
+  calculateEffectiveSpeed,
+  smoothSpeedMs,
+  convertMsToKmh,
+  calculateLiveETA,
+  formatDistance,
+  calculateNavigationProgress,
+} from "./routeProgressService.js";
+
+// Reliable Off-Route Detection Service (Step GPS-7)
+export {
+  OFF_ROUTE_CONFIG,
+  calculateEffectiveThresholds,
+  evaluateOffRouteState,
+} from "./offRouteService.js";
