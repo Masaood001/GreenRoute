@@ -17,6 +17,12 @@ export default function MapView({
   areaId = 'panki-kanpur',
   originLocation,
   destinationLocation,
+  currentUserLocation,
+  _isLiveTracking = false,
+  isMapFollowingUser = false,
+
+  onPauseMapFollow,
+  onRecenter,
   activeConditions = [],
   onSelectOrigin,
   onSelectDestination,
@@ -29,6 +35,7 @@ export default function MapView({
   const mapRef = useRef(null);
   const [clickTarget, setClickTarget] = useState('start'); // 'start' | 'destination'
   const [lastClickedLoc, setLastClickedLoc] = useState(null);
+  const [recenterNotice, setRecenterNotice] = useState(null);
 
   const layersRef = useRef({
     boundary: null,
@@ -44,7 +51,10 @@ export default function MapView({
     onSelectDestination,
     onMapClickLocation,
     onResolveCondition,
+    onOpenReportModal,
     onBoundaryError,
+    onPauseMapFollow,
+    onRecenter,
     clickTarget,
     areaId,
   });
@@ -55,11 +65,26 @@ export default function MapView({
       onSelectDestination,
       onMapClickLocation,
       onResolveCondition,
+      onOpenReportModal,
       onBoundaryError,
+      onPauseMapFollow,
+      onRecenter,
       clickTarget,
       areaId,
     };
-  }, [onSelectOrigin, onSelectDestination, onMapClickLocation, onResolveCondition, onBoundaryError, clickTarget, areaId]);
+  }, [
+    onSelectOrigin,
+    onSelectDestination,
+    onMapClickLocation,
+    onResolveCondition,
+    onOpenReportModal,
+    onBoundaryError,
+    onPauseMapFollow,
+    onRecenter,
+    clickTarget,
+    areaId,
+  ]);
+
 
   // Global popup button click handler for resolving conditions
   useEffect(() => {
@@ -127,6 +152,25 @@ export default function MapView({
     // 6. Conditions Layer Group
     const conditionsLayer = L.layerGroup().addTo(map);
 
+    // Detect manual user drag / pan / zoom to pause follow mode
+    map.on('dragstart', () => {
+      if (callbacksRef.current.onPauseMapFollow) {
+        callbacksRef.current.onPauseMapFollow();
+      }
+    });
+
+    map.on('movestart', (e) => {
+      if (e.originalEvent && callbacksRef.current.onPauseMapFollow) {
+        callbacksRef.current.onPauseMapFollow();
+      }
+    });
+
+    map.on('zoomstart', (e) => {
+      if (e.originalEvent && callbacksRef.current.onPauseMapFollow) {
+        callbacksRef.current.onPauseMapFollow();
+      }
+    });
+
     // Map Click Listener -> Free Map Location Selection inside Panki
     map.on('click', (e) => {
       const { lat, lng } = e.latlng;
@@ -159,6 +203,7 @@ export default function MapView({
         setClickTarget('destination');
       }
     });
+
 
     mapRef.current = map;
     layersRef.current = {
@@ -367,7 +412,67 @@ export default function MapView({
         .addTo(markersLayer);
     }
 
-    // 5. Draw Active Panki Condition Overlays & Markers
+    // 5. Draw Live Blue User Location Marker & Accuracy Halo
+    if (currentUserLocation && typeof currentUserLocation.latitude === 'number' && typeof currentUserLocation.longitude === 'number') {
+      const userLat = currentUserLocation.latitude;
+      const userLng = currentUserLocation.longitude;
+      const userCoord = [userLat, userLng];
+
+      // Draw Accuracy Circle/Halo if accuracy is available
+      if (typeof currentUserLocation.accuracy === 'number' && currentUserLocation.accuracy > 0 && !isNaN(currentUserLocation.accuracy)) {
+        L.circle(userCoord, {
+          radius: currentUserLocation.accuracy,
+          color: '#3b82f6',
+          fillColor: '#3b82f6',
+          fillOpacity: 0.15,
+          weight: 1.5,
+          stroke: true,
+        }).addTo(markersLayer);
+      }
+
+      // Draw Pulsing Blue Dot Marker
+      const blueUserIcon = L.divIcon({
+        className: 'custom-map-marker-user',
+        html: `
+          <div style="position: relative; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 24px; height: 24px; background-color: rgba(59, 130, 246, 0.35); border-radius: 50%; border: 1px solid #3b82f6;"></div>
+            <div style="width: 16px; height: 16px; background-color: #2563eb; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.35);"></div>
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+        popupAnchor: [0, -14],
+      });
+
+      const accuracyText = typeof currentUserLocation.accuracy === 'number'
+        ? `±${Math.round(currentUserLocation.accuracy)}m accuracy`
+        : 'Live GPS Position';
+
+      const userPopupHtml = `
+        <div style="font-family: system-ui, -apple-system, sans-serif; padding: 2px; min-width: 150px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+            <span style="background-color: #2563eb; color: white; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase;">
+              Current Location
+            </span>
+          </div>
+          <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
+            Live User Marker
+          </div>
+          <div style="font-size: 11px; color: #64748b; font-family: monospace;">
+            ${userLat.toFixed(6)}, ${userLng.toFixed(6)}
+          </div>
+          <div style="font-size: 10px; color: #3b82f6; font-weight: 600; margin-top: 2px;">
+            ${accuracyText}
+          </div>
+        </div>
+      `;
+
+      L.marker(userCoord, { icon: blueUserIcon })
+        .bindPopup(userPopupHtml)
+        .addTo(markersLayer);
+    }
+
+    // 6. Draw Active Panki Condition Overlays & Markers
     if (Array.isArray(activeConditions) && activeConditions.length > 0) {
       const { mappedConditions } = mapPankiConditionsForGraph(activeConditions);
 
@@ -439,7 +544,35 @@ export default function MapView({
           .addTo(conditionsLayer);
       }
     }
-  }, [selectedRoute, routes, areaId, originLocation, destinationLocation, activeConditions]);
+  }, [selectedRoute, routes, areaId, originLocation, destinationLocation, currentUserLocation, activeConditions]);
+
+  // Controlled Map Follow Effect
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapFollowingUser || !currentUserLocation) return;
+    if (typeof currentUserLocation.latitude !== 'number' || typeof currentUserLocation.longitude !== 'number') return;
+
+    const lat = currentUserLocation.latitude;
+    const lng = currentUserLocation.longitude;
+    map.panTo([lat, lng], { animate: true, duration: 0.5 });
+  }, [currentUserLocation, isMapFollowingUser]);
+
+  const handleRecenterClick = () => {
+    if (currentUserLocation && typeof currentUserLocation.latitude === 'number' && typeof currentUserLocation.longitude === 'number') {
+      const map = mapRef.current;
+      if (map) {
+        const zoom = Math.max(map.getZoom(), 15);
+        map.setView([currentUserLocation.latitude, currentUserLocation.longitude], zoom, { animate: true });
+      }
+      setRecenterNotice(null);
+      if (onRecenter) {
+        onRecenter();
+      }
+    } else {
+      setRecenterNotice('Live location is not available yet.');
+      setTimeout(() => setRecenterNotice(null), 3000);
+    }
+  };
 
   return (
     <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-sm border border-slate-200">
@@ -486,6 +619,27 @@ export default function MapView({
       <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold text-slate-700 z-[400] flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
         <span>Panki Study Area (~5 km²)</span>
+      </div>
+
+      {/* Recenter / Map Follow Control */}
+      <div className="absolute bottom-4 right-4 z-[400] flex flex-col items-end gap-2">
+        {recenterNotice && (
+          <div className="bg-slate-900 text-white text-xs font-semibold px-3 py-1.5 rounded-xl shadow-lg border border-slate-700">
+            {recenterNotice}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handleRecenterClick}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold shadow-md border transition-all flex items-center gap-1.5 ${
+            isMapFollowingUser && currentUserLocation
+              ? 'bg-blue-600 text-white border-blue-500 hover:bg-blue-700 ring-2 ring-blue-400/30'
+              : 'bg-white/95 text-slate-800 border-slate-200 hover:bg-slate-100'
+          }`}
+        >
+          <span>📍</span>
+          <span>{isMapFollowingUser ? 'Following' : 'Recenter'}</span>
+        </button>
       </div>
     </div>
   );

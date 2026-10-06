@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Header from './components/Header';
 import SearchBox from './components/SearchBox';
 import MapPlaceholder from './components/MapPlaceholder';
@@ -11,6 +11,7 @@ import AboutModal from './components/AboutModal';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import ProfileModal from './components/ProfileModal';
 import ReportConditionModal from './components/ReportConditionModal';
+import NavigationProgress from './components/NavigationProgress';
 import { defaultPreferences } from './mockData';
 import {
   calculateLiveCampusRoutes,
@@ -18,7 +19,14 @@ import {
   signOutUser,
   subscribeCampusConditions,
   resolveCampusCondition,
+  startLocationTracking,
+  stopLocationTracking,
+  GEOLOCATION_ERROR_CODES,
+  shouldAcceptNewLocationFix,
+  calculateNavigationProgress,
 } from './services/index.js';
+
+
 import {
   mapInputToNodeId,
   resolvePreferenceProfile,
@@ -44,6 +52,23 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
+
+  // Live GPS User Tracking State
+  const [currentUserLocation, setCurrentUserLocation] = useState(null);
+  const [previousUserLocation, setPreviousUserLocation] = useState(null);
+  const [isLiveTracking, setIsLiveTracking] = useState(false);
+  const [isMapFollowingUser, setIsMapFollowingUser] = useState(false);
+  const [trackingError, setTrackingError] = useState(null);
+  const trackingWatchIdRef = useRef(null);
+
+  const navigationProgress = calculateNavigationProgress({
+    currentUserLocation,
+    selectedRoute,
+    travelMode,
+    previousLocation: previousUserLocation,
+  });
+
+
 
   // Authentication & Modals State
   const [user, setUser] = useState(null);
@@ -84,6 +109,106 @@ function App() {
   };
 
   const [boundaryError, setBoundaryError] = useState(null);
+
+  const handlePauseMapFollow = useCallback(() => {
+    setIsMapFollowingUser(false);
+  }, []);
+
+  const handleRecenter = useCallback(() => {
+    if (currentUserLocation && typeof currentUserLocation.latitude === 'number' && typeof currentUserLocation.longitude === 'number') {
+      setIsMapFollowingUser(true);
+      return { success: true };
+    }
+    return { success: false, message: 'Live location is not available yet.' };
+  }, [currentUserLocation]);
+
+  const handleToggleLiveTracking = useCallback(() => {
+    if (trackingWatchIdRef.current !== null) {
+      stopLocationTracking(trackingWatchIdRef.current);
+      trackingWatchIdRef.current = null;
+    }
+
+    if (isLiveTracking) {
+      setIsLiveTracking(false);
+      setIsMapFollowingUser(false);
+      setCurrentUserLocation(null);
+      setPreviousUserLocation(null);
+      setTrackingError(null);
+    } else {
+      setTrackingError(null);
+      setIsLiveTracking(true);
+      setIsMapFollowingUser(true);
+
+      const options = {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000,
+      };
+
+      const watchId = startLocationTracking(
+        (location) => {
+          setCurrentUserLocation((prevTrusted) => {
+            if (shouldAcceptNewLocationFix(prevTrusted, location)) {
+              if (prevTrusted) {
+                setPreviousUserLocation(prevTrusted);
+              }
+              return {
+                ...location,
+                source: 'gps',
+                isLive: true,
+              };
+            }
+            return prevTrusted;
+          });
+          setTrackingError(null);
+        },
+
+        (err) => {
+          let friendlyMessage = 'Unable to determine your current location.';
+          if (err && err.code) {
+            switch (err.code) {
+              case GEOLOCATION_ERROR_CODES.PERMISSION_DENIED:
+                friendlyMessage = 'Location permission was denied. Please allow location access.';
+                break;
+              case GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE:
+                friendlyMessage = 'Unable to determine your current location.';
+                break;
+              case GEOLOCATION_ERROR_CODES.TIMEOUT:
+                friendlyMessage = 'Location request timed out. Please try again.';
+                break;
+              case GEOLOCATION_ERROR_CODES.NOT_SUPPORTED:
+                friendlyMessage = 'Location is not supported in this browser.';
+                break;
+              default:
+                friendlyMessage = err.message || friendlyMessage;
+                break;
+            }
+          }
+          setTrackingError(friendlyMessage);
+          setBoundaryError(friendlyMessage);
+        },
+        options
+      );
+
+      if (watchId !== null) {
+        trackingWatchIdRef.current = watchId;
+      } else {
+        setIsLiveTracking(false);
+        setIsMapFollowingUser(false);
+      }
+    }
+  }, [isLiveTracking]);
+
+
+  // Cleanup watcher on unmount
+  useEffect(() => {
+    return () => {
+      if (trackingWatchIdRef.current !== null) {
+        stopLocationTracking(trackingWatchIdRef.current);
+        trackingWatchIdRef.current = null;
+      }
+    };
+  }, []);
 
   const handleSelectRoute = (route) => {
     setSelectedRoute(route);
@@ -230,8 +355,24 @@ function App() {
             onSelectOrigin={handleSelectOrigin}
             onSelectDestination={handleSelectDestination}
             onSearch={handleGenerateRoutes}
+            onBoundaryError={handleBoundaryError}
+            isLiveTracking={isLiveTracking}
+            isMapFollowingUser={isMapFollowingUser}
+            currentUserLocation={currentUserLocation}
+            trackingError={trackingError}
+            onToggleLiveTracking={handleToggleLiveTracking}
+            onRecenter={handleRecenter}
             loading={loading}
           />
+
+          {(isLiveTracking || selectedRoute) && (
+            <NavigationProgress
+              navigationProgress={navigationProgress}
+              isLiveTracking={isLiveTracking}
+              selectedRoute={selectedRoute}
+            />
+          )}
+
 
           {(boundaryError || error) && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-800 text-sm font-semibold shadow-sm">
@@ -260,6 +401,11 @@ function App() {
               areaId={areaId}
               originLocation={originLocation}
               destinationLocation={destinationLocation}
+              currentUserLocation={currentUserLocation}
+              isLiveTracking={isLiveTracking}
+              isMapFollowingUser={isMapFollowingUser}
+              onPauseMapFollow={handlePauseMapFollow}
+              onRecenter={handleRecenter}
               activeConditions={activeConditions}
               onSelectOrigin={handleSelectOrigin}
               onSelectDestination={handleSelectDestination}
@@ -267,6 +413,7 @@ function App() {
               onOpenReportModal={handleOpenReportModal}
               onBoundaryError={handleBoundaryError}
             />
+
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">

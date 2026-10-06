@@ -303,3 +303,37 @@ export function resolvePankiLocationToNode(locationInput) {
 
   return null;
 }
+
+/**
+ * Creates a normalized GPS location object for current user location.
+ * Validates Panki boundary containment, preserves exact raw GPS coordinates, and resolves to the nearest Panki graph node.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {object} Normalized GPS location object or error object
+ */
+export function createGpsLocation(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+    return { error: 'Invalid coordinates provided.' };
+  }
+
+  if (!isPointInPankiBoundary(lat, lng)) {
+    return { error: 'Your current location is outside the Panki study area.' };
+  }
+
+  const nearestNode = findNearestNodeInArea('panki-kanpur', lat, lng);
+
+  return {
+    id: `gps-${lat.toFixed(6)}-${lng.toFixed(6)}`,
+    name: 'My Location',
+    label: 'My Location',
+    latitude: lat,
+    longitude: lng,
+    coordinate: { latitude: lat, longitude: lng },
+    nodeId: nearestNode ? nearestNode.id : null,
+    resolvedNodeId: nearestNode ? nearestNode.id : null,
+    source: 'gps',
+    isGps: true,
+    isFabricated: false,
+    distanceToNodeMeters: nearestNode ? nearestNode.distanceMeters : null,
+  };
+}

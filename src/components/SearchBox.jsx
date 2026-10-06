@@ -1,5 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { getPankiLocationSuggestions, searchPankiLocations } from '../areas/panki/locationSearch.js';
+import {
+  getPankiLocationSuggestions,
+  searchPankiLocations,
+  createGpsLocation,
+} from '../areas/panki/locationSearch.js';
+import {
+  getCurrentLocation,
+  GEOLOCATION_ERROR_CODES,
+  getAccuracyClassification,
+} from '../services/index.js';
+
 
 export default function SearchBox({
   origin: originProp = '',
@@ -7,8 +17,16 @@ export default function SearchBox({
   onSearch,
   onSelectOrigin,
   onSelectDestination,
+  onBoundaryError,
+  isLiveTracking = false,
+  isMapFollowingUser = false,
+  currentUserLocation = null,
+  trackingError = null,
+  onToggleLiveTracking,
+  onRecenter,
   loading = false,
 }) {
+
   const [origin, setOrigin] = useState(
     typeof originProp === 'object' ? originProp.name || '' : originProp || ''
   );
@@ -16,6 +34,7 @@ export default function SearchBox({
     typeof destinationProp === 'object' ? destinationProp.name || '' : destinationProp || ''
   );
   const [travelMode, setTravelMode] = useState('walking');
+  const [locLoading, setLocLoading] = useState(false);
 
   // Dropdown Autocomplete States
   const [showOriginSuggestions, setShowOriginSuggestions] = useState(false);
@@ -67,6 +86,7 @@ export default function SearchBox({
     setShowDestSuggestions(true);
   };
 
+  const isOriginGps = typeof originProp === 'object' && (originProp?.source === 'gps' || originProp?.isGps);
   const isOriginFromMap = typeof originProp === 'object' && (originProp?.source === 'map-click' || originProp?.isMapClick);
   const isDestFromMap = typeof destinationProp === 'object' && (destinationProp?.source === 'map-click' || destinationProp?.isMapClick);
 
@@ -88,12 +108,57 @@ export default function SearchBox({
     if (onSelectDestination) onSelectDestination(item);
   };
 
+  const handleUseMyLocation = async () => {
+    setLocLoading(true);
+    if (onBoundaryError) onBoundaryError(null);
+
+    try {
+      const pos = await getCurrentLocation();
+      const { latitude, longitude } = pos;
+
+      const gpsLoc = createGpsLocation(latitude, longitude);
+
+      if (gpsLoc.error) {
+        if (onBoundaryError) onBoundaryError(gpsLoc.error);
+        return;
+      }
+
+      setOrigin(gpsLoc.name || 'My Location');
+      setShowOriginSuggestions(false);
+      if (onSelectOrigin) onSelectOrigin(gpsLoc);
+    } catch (err) {
+      let friendlyMessage = 'Unable to determine your current location.';
+      if (err && err.code) {
+        switch (err.code) {
+          case GEOLOCATION_ERROR_CODES.PERMISSION_DENIED:
+            friendlyMessage = 'Location permission was denied. Please allow location access.';
+            break;
+          case GEOLOCATION_ERROR_CODES.POSITION_UNAVAILABLE:
+            friendlyMessage = 'Unable to determine your current location.';
+            break;
+          case GEOLOCATION_ERROR_CODES.TIMEOUT:
+            friendlyMessage = 'Location request timed out. Please try again.';
+            break;
+          case GEOLOCATION_ERROR_CODES.NOT_SUPPORTED:
+            friendlyMessage = 'Location is not supported in this browser.';
+            break;
+          default:
+            friendlyMessage = err.message || friendlyMessage;
+            break;
+        }
+      }
+      if (onBoundaryError) onBoundaryError(friendlyMessage);
+    } finally {
+      setLocLoading(false);
+    }
+  };
+
   const handleGenerate = (e) => {
     if (e) e.preventDefault();
     if (loading || !isFormValid) return;
 
     let originLocObj;
-    if (typeof originProp === 'object' && originProp !== null && (originProp.name === origin || originProp.label === origin)) {
+    if (typeof originProp === 'object' && originProp !== null && (originProp.name === origin || originProp.label === origin || originProp.isGps || originProp.source === 'gps')) {
       originLocObj = originProp;
     } else {
       const originResults = searchPankiLocations(origin);
@@ -126,14 +191,30 @@ export default function SearchBox({
       <form onSubmit={handleGenerate} className="space-y-4 sm:space-y-5">
         {/* ORIGIN INPUT */}
         <div className="relative" ref={originBoxRef}>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
             <label className="block text-sm font-semibold text-slate-700">Origin</label>
-            {isOriginFromMap && (
-              <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md flex items-center gap-1">
-                <span>📍</span> Selected on map
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {isOriginGps ? (
+                <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-md flex items-center gap-1">
+                  <span>📍</span> GPS
+                </span>
+              ) : isOriginFromMap ? (
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md flex items-center gap-1">
+                  <span>📍</span> Selected on map
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleUseMyLocation}
+                disabled={loading || locLoading}
+                className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <span>📍</span>
+                <span>{locLoading ? 'Locating...' : 'Use My Location'}</span>
+              </button>
+            </div>
           </div>
+
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none z-10">
               <div className="w-3 h-3 rounded-full border-2 border-emerald-600 bg-emerald-500 transition-colors"></div>
@@ -300,6 +381,75 @@ export default function SearchBox({
         >
           {loading ? 'Generating Routes...' : 'Generate Routes'}
         </button>
+
+        {/* Live Location Controls & Status Indicator */}
+        {(() => {
+          const accInfo = currentUserLocation?.accuracy != null ? getAccuracyClassification(currentUserLocation.accuracy) : null;
+          let statusText = 'Location not active';
+
+          if (isLiveTracking) {
+            if (!currentUserLocation) {
+              statusText = 'Improving GPS accuracy…';
+            } else if (isMapFollowingUser) {
+              statusText = accInfo ? `Following you (~${Math.round(currentUserLocation.accuracy)} m)` : 'Following you';
+            } else {
+              statusText = accInfo ? `Follow paused (~${Math.round(currentUserLocation.accuracy)} m)` : 'Follow paused';
+            }
+          } else if (trackingError) {
+            statusText = 'Location unavailable';
+          }
+
+          return (
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <div className={`w-2.5 h-2.5 rounded-full ${
+                  isLiveTracking && currentUserLocation
+                    ? (isMapFollowingUser ? 'bg-blue-600 animate-pulse' : 'bg-amber-500 animate-pulse')
+                    : isLiveTracking
+                    ? 'bg-amber-500 animate-ping'
+                    : trackingError
+                    ? 'bg-red-500'
+                    : 'bg-slate-300'
+                }`}></div>
+                <span className="text-xs font-semibold text-slate-700">
+                  {statusText}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {isLiveTracking && (
+                  <button
+                    type="button"
+                    onClick={onRecenter}
+                    className={`text-xs font-bold px-2.5 py-1.5 rounded-xl border transition-all flex items-center gap-1 shadow-sm ${
+                      isMapFollowingUser
+                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                    }`}
+                  >
+                    <span>📍</span>
+                    <span>{isMapFollowingUser ? 'Following' : 'Recenter'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={onToggleLiveTracking}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all flex items-center gap-1.5 shadow-sm ${
+                    isLiveTracking
+                      ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                      : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                  }`}
+                >
+                  <span>📍</span>
+                  <span>{isLiveTracking ? 'Live Location On' : 'Start Live Location'}</span>
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
+
       </form>
     </div>
   );
