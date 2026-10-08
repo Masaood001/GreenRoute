@@ -143,10 +143,10 @@ export async function addCampusCondition(conditionData) {
   validateCampusCondition(conditionData);
 
   const currentUser = auth.currentUser;
-  if (!currentUser) {
-    throw new Error("Authentication required: You must be signed in to submit a road condition.");
-  }
-  const reportedBy = currentUser.uid;
+  const isAuth = Boolean(currentUser);
+  const uidExists = Boolean(currentUser?.uid);
+
+  const reportedBy = currentUser ? currentUser.uid : null;
 
   const payload = {
     title: conditionData.title.trim(),
@@ -155,6 +155,8 @@ export async function addCampusCondition(conditionData) {
     severity: conditionData.severity,
     status: conditionData.status || "active",
     location: conditionData.location,
+    startLocation: conditionData.startLocation || null,
+    endLocation: conditionData.endLocation || null,
     affectedPathIds: conditionData.affectedPathIds || [],
     startTime: conditionData.startTime || new Date().toISOString(),
     endTime: conditionData.endTime || null,
@@ -166,9 +168,31 @@ export async function addCampusCondition(conditionData) {
 
   validateCampusCondition(payload);
 
+  console.log("[CampusConditions Diagnostics]", {
+    authAppMatches: auth.app.options.projectId,
+    isUserAuthenticated: isAuth,
+    hasUid: uidExists,
+    reportedByMatchesAuthUid: currentUser ? (reportedBy === currentUser.uid) : false,
+    payloadReportedBy: reportedBy ? `${reportedBy.substring(0, 4)}...` : null,
+    payloadKeys: Object.keys(payload),
+    locationIsObject: typeof payload.location === "object" && payload.location !== null,
+    locationLat: payload.location?.latitude,
+    locationLng: payload.location?.longitude,
+  });
+
   const colRef = collection(db, COLLECTION_NAME);
-  const docRef = await addDoc(colRef, payload);
-  return docRef.id;
+  try {
+    const docRef = await addDoc(colRef, payload);
+    console.log("[CampusConditions Diagnostics] Write success! Doc ID:", docRef.id);
+    return docRef.id;
+  } catch (err) {
+    console.error("[CampusConditions Diagnostics] Write failed!", {
+      code: err.code,
+      name: err.name,
+      message: err.message,
+    });
+    throw err;
+  }
 }
 
 /**

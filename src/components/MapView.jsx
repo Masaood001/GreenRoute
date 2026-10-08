@@ -30,11 +30,19 @@ export default function MapView({
   onResolveCondition,
   onOpenReportModal,
   onBoundaryError,
+
+  reportStartLocation,
+  reportEndLocation,
+  onSelectReportStart,
+  onSelectReportEnd,
+  reportSelectionMode,
+  _onSetReportSelectionMode,
+  areMapControlsVisible = true,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const [clickTarget, setClickTarget] = useState('start'); // 'start' | 'destination'
-  const [lastClickedLoc, setLastClickedLoc] = useState(null);
+  const [clickTarget, setClickTarget] = useState('start'); // 'start' | 'destination' | 'report-start' | 'report-end'
+  const [_lastClickedLoc, setLastClickedLoc] = useState(null);
   const [recenterNotice, setRecenterNotice] = useState(null);
 
   const layersRef = useRef({
@@ -49,6 +57,8 @@ export default function MapView({
   const callbacksRef = useRef({
     onSelectOrigin,
     onSelectDestination,
+    onSelectReportStart,
+    onSelectReportEnd,
     onMapClickLocation,
     onResolveCondition,
     onOpenReportModal,
@@ -56,6 +66,7 @@ export default function MapView({
     onPauseMapFollow,
     onRecenter,
     clickTarget,
+    reportSelectionMode,
     areaId,
   });
 
@@ -63,6 +74,8 @@ export default function MapView({
     callbacksRef.current = {
       onSelectOrigin,
       onSelectDestination,
+      onSelectReportStart,
+      onSelectReportEnd,
       onMapClickLocation,
       onResolveCondition,
       onOpenReportModal,
@@ -70,11 +83,14 @@ export default function MapView({
       onPauseMapFollow,
       onRecenter,
       clickTarget,
+      reportSelectionMode,
       areaId,
     };
   }, [
     onSelectOrigin,
     onSelectDestination,
+    onSelectReportStart,
+    onSelectReportEnd,
     onMapClickLocation,
     onResolveCondition,
     onOpenReportModal,
@@ -82,9 +98,9 @@ export default function MapView({
     onPauseMapFollow,
     onRecenter,
     clickTarget,
+    reportSelectionMode,
     areaId,
   ]);
-
 
   // Global popup button click handler for resolving conditions
   useEffect(() => {
@@ -174,7 +190,16 @@ export default function MapView({
     // Map Click Listener -> Free Map Location Selection inside Panki
     map.on('click', (e) => {
       const { lat, lng } = e.latlng;
-      const { onSelectOrigin, onSelectDestination, onMapClickLocation, onBoundaryError, clickTarget } = callbacksRef.current;
+      const {
+        onSelectOrigin,
+        onSelectDestination,
+        onSelectReportStart,
+        onSelectReportEnd,
+        onMapClickLocation,
+        onBoundaryError,
+        clickTarget,
+        reportSelectionMode,
+      } = callbacksRef.current;
 
       const locObj = createMapClickLocation(lat, lng);
 
@@ -191,6 +216,16 @@ export default function MapView({
 
       setLastClickedLoc(locObj);
 
+      if (reportSelectionMode === 'report-start' || clickTarget === 'report-start') {
+        if (onSelectReportStart) onSelectReportStart(locObj);
+        return;
+      }
+
+      if (reportSelectionMode === 'report-end' || clickTarget === 'report-end') {
+        if (onSelectReportEnd) onSelectReportEnd(locObj);
+        return;
+      }
+
       if (onMapClickLocation) {
         onMapClickLocation(locObj, clickTarget);
       }
@@ -203,7 +238,6 @@ export default function MapView({
         setClickTarget('destination');
       }
     });
-
 
     mapRef.current = map;
     layersRef.current = {
@@ -220,7 +254,7 @@ export default function MapView({
     };
   }, []);
 
-  // Update Route Polylines, Origin/Dest Markers, and Active Conditions
+  // Update Route Polylines, Origin/Dest Markers, Active Conditions, and Report Markers
   useEffect(() => {
     const map = mapRef.current;
     const { routes: routesLayer, markers: markersLayer, conditions: conditionsLayer } = layersRef.current;
@@ -418,7 +452,6 @@ export default function MapView({
       const userLng = currentUserLocation.longitude;
       const userCoord = [userLat, userLng];
 
-      // Draw Accuracy Circle/Halo if accuracy is available
       if (typeof currentUserLocation.accuracy === 'number' && currentUserLocation.accuracy > 0 && !isNaN(currentUserLocation.accuracy)) {
         L.circle(userCoord, {
           radius: currentUserLocation.accuracy,
@@ -430,7 +463,6 @@ export default function MapView({
         }).addTo(markersLayer);
       }
 
-      // Draw Pulsing Blue Dot Marker
       const blueUserIcon = L.divIcon({
         className: 'custom-map-marker-user',
         html: `
@@ -472,7 +504,78 @@ export default function MapView({
         .addTo(markersLayer);
     }
 
-    // 6. Draw Active Panki Condition Overlays & Markers
+    // 6. Draw Report Start & End Temporary Markers
+    if (reportStartLocation) {
+      const rStartLat = reportStartLocation.coordinate?.latitude ?? reportStartLocation.latitude;
+      const rStartLng = reportStartLocation.coordinate?.longitude ?? reportStartLocation.longitude;
+
+      if (typeof rStartLat === 'number' && typeof rStartLng === 'number') {
+        const reportStartIcon = L.divIcon({
+          className: 'custom-map-marker-report-start',
+          html: `
+            <div style="position: relative; width: 32px; height: 42px; display: flex; align-items: center; justify-content: center;">
+              <svg width="32" height="42" viewBox="0 0 32 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 3px 6px rgba(0,0,0,0.4));">
+                <path d="M16 0C7.163 0 0 7.163 0 16C0 26.5 16 42 16 42C16 42 32 26.5 32 16C32 7.163 24.837 0 16 0Z" fill="#F59E0B"/>
+                <circle cx="16" cy="15" r="7" fill="white"/>
+                <text x="16" y="19" text-anchor="middle" fill="#B45309" font-size="10" font-weight="bold">S</text>
+              </svg>
+            </div>
+          `,
+          iconSize: [32, 42],
+          iconAnchor: [16, 42],
+          popupAnchor: [0, -40],
+        });
+
+        L.marker([rStartLat, rStartLng], { icon: reportStartIcon })
+          .bindPopup(`<b>Problem Start Point</b><br/>${reportStartLocation.name || 'Report Start'}`)
+          .addTo(markersLayer);
+      }
+    }
+
+    if (reportEndLocation) {
+      const rEndLat = reportEndLocation.coordinate?.latitude ?? reportEndLocation.latitude;
+      const rEndLng = reportEndLocation.coordinate?.longitude ?? reportEndLocation.longitude;
+
+      if (typeof rEndLat === 'number' && typeof rEndLng === 'number') {
+        const reportEndIcon = L.divIcon({
+          className: 'custom-map-marker-report-end',
+          html: `
+            <div style="position: relative; width: 32px; height: 42px; display: flex; align-items: center; justify-content: center;">
+              <svg width="32" height="42" viewBox="0 0 32 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 3px 6px rgba(0,0,0,0.4));">
+                <path d="M16 0C7.163 0 0 7.163 0 16C0 26.5 16 42 16 42C16 42 32 26.5 32 16C32 7.163 24.837 0 16 0Z" fill="#D97706"/>
+                <circle cx="16" cy="15" r="7" fill="white"/>
+                <text x="16" y="19" text-anchor="middle" fill="#78350F" font-size="10" font-weight="bold">E</text>
+              </svg>
+            </div>
+          `,
+          iconSize: [32, 42],
+          iconAnchor: [16, 42],
+          popupAnchor: [0, -40],
+        });
+
+        L.marker([rEndLat, rEndLng], { icon: reportEndIcon })
+          .bindPopup(`<b>Problem End Point</b><br/>${reportEndLocation.name || 'Report End'}`)
+          .addTo(markersLayer);
+      }
+    }
+
+    if (reportStartLocation && reportEndLocation) {
+      const sLat = reportStartLocation.coordinate?.latitude ?? reportStartLocation.latitude;
+      const sLng = reportStartLocation.coordinate?.longitude ?? reportStartLocation.longitude;
+      const eLat = reportEndLocation.coordinate?.latitude ?? reportEndLocation.latitude;
+      const eLng = reportEndLocation.coordinate?.longitude ?? reportEndLocation.longitude;
+
+      if (typeof sLat === 'number' && typeof sLng === 'number' && typeof eLat === 'number' && typeof eLng === 'number') {
+        L.polyline([[sLat, sLng], [eLat, eLng]], {
+          color: '#f59e0b',
+          weight: 4.5,
+          opacity: 0.9,
+          dashArray: '6, 6',
+        }).addTo(markersLayer);
+      }
+    }
+
+    // 7. Draw Active Panki Condition Overlays & Markers
     if (Array.isArray(activeConditions) && activeConditions.length > 0) {
       const { mappedConditions } = mapPankiConditionsForGraph(activeConditions);
 
@@ -544,7 +647,17 @@ export default function MapView({
           .addTo(conditionsLayer);
       }
     }
-  }, [selectedRoute, routes, areaId, originLocation, destinationLocation, currentUserLocation, activeConditions]);
+  }, [
+    selectedRoute,
+    routes,
+    areaId,
+    originLocation,
+    destinationLocation,
+    currentUserLocation,
+    activeConditions,
+    reportStartLocation,
+    reportEndLocation,
+  ]);
 
   // Controlled Map Follow Effect
   useEffect(() => {
@@ -579,47 +692,51 @@ export default function MapView({
       <div ref={mapContainerRef} className="w-full h-full z-0 cursor-crosshair" />
 
       {/* Map Click Target Selector & Report Banner */}
-      <div className="absolute top-3 left-3 z-[400] bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-1.5 flex-wrap max-w-[calc(100%-140px)] sm:max-w-none">
-        <span className="text-xs font-bold text-slate-600 pl-2 pr-1 hidden sm:inline">Map Click:</span>
-        <button
-          type="button"
-          onClick={() => setClickTarget('start')}
-          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-            clickTarget === 'start' || clickTarget === 'origin'
-              ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600/30'
-              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Set Start
-        </button>
-        <button
-          type="button"
-          onClick={() => setClickTarget('destination')}
-          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-            clickTarget === 'destination'
-              ? 'bg-red-600 text-white shadow-sm ring-2 ring-red-600/30'
-              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Set Destination
-        </button>
-        {onOpenReportModal && (
+      {areMapControlsVisible && (
+        <div className="absolute top-3 left-3 z-[400] bg-white/95 backdrop-blur-md p-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-1.5 flex-wrap max-w-[calc(100%-140px)] sm:max-w-none">
+          <span className="text-xs font-bold text-slate-600 pl-2 pr-1 hidden sm:inline">Map Click:</span>
           <button
             type="button"
-            onClick={() => onOpenReportModal(lastClickedLoc || originLocation)}
-            className="px-3 py-1 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-sm flex items-center gap-1"
+            onClick={() => setClickTarget('start')}
+            className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+              clickTarget === 'start' || clickTarget === 'origin'
+                ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600/30'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
           >
-            <span>⚠️</span>
-            <span>Report Condition</span>
+            Set Start
           </button>
-        )}
-      </div>
+          <button
+            type="button"
+            onClick={() => setClickTarget('destination')}
+            className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+              clickTarget === 'destination'
+                ? 'bg-red-600 text-white shadow-sm ring-2 ring-red-600/30'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            Set Destination
+          </button>
+          {onOpenReportModal && (
+            <button
+              type="button"
+              onClick={() => onOpenReportModal()}
+              className="px-3 py-1 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-all shadow-sm flex items-center gap-1"
+            >
+              <span>⚠️</span>
+              <span>Report Condition</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Area Badge */}
-      <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold text-slate-700 z-[400] flex items-center gap-2">
-        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span>Panki Study Area (~5 km²)</span>
-      </div>
+      {areMapControlsVisible && (
+        <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold text-slate-700 z-[400] flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>Panki Study Area (~5 km²)</span>
+        </div>
+      )}
 
       {/* Recenter / Map Follow Control */}
       <div className="absolute bottom-4 right-4 z-[400] flex flex-col items-end gap-2">

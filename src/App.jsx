@@ -197,7 +197,17 @@ function App() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [reportLocation, setReportLocation] = useState(null);
+
+  // Independent Report A Problem Location State
+  const [reportStartLocation, setReportStartLocation] = useState(null);
+  const [reportEndLocation, setReportEndLocation] = useState(null);
+  const [reportSelectionMode, setReportSelectionMode] = useState(null);
+
+  // Derived modal visibility state for hiding map toolbar controls
+  const isAnyForegroundModalOpen = Boolean(
+    isAuthOpen || isAboutOpen || isChangePasswordOpen || isProfileOpen || isReportModalOpen
+  );
+  const areMapControlsVisible = !isAnyForegroundModalOpen;
 
   useEffect(() => {
     const unsubscribe = onAuthStateChange((currentUser) => {
@@ -350,10 +360,30 @@ function App() {
     setBoundaryError(errorMsg);
   };
 
-  const handleOpenReportModal = (loc) => {
-    setReportLocation(loc || originLocation);
+  const handleOpenReportModal = () => {
+    setReportStartLocation(null);
+    setReportEndLocation(null);
+    setReportSelectionMode(null);
     setIsReportModalOpen(true);
   };
+
+  const handleSelectReportStart = useCallback((loc) => {
+    setReportStartLocation(loc);
+    setReportSelectionMode(null);
+    setIsReportModalOpen(true);
+  }, []);
+
+  const handleSelectReportEnd = useCallback((loc) => {
+    setReportEndLocation(loc);
+    setReportSelectionMode(null);
+    setIsReportModalOpen(true);
+  }, []);
+
+  const handleClearReportLocations = useCallback(() => {
+    setReportStartLocation(null);
+    setReportEndLocation(null);
+    setReportSelectionMode(null);
+  }, []);
 
   const handleResolveCondition = async (conditionId) => {
     try {
@@ -539,6 +569,13 @@ function App() {
               onResolveCondition={handleResolveCondition}
               onOpenReportModal={handleOpenReportModal}
               onBoundaryError={handleBoundaryError}
+              reportStartLocation={reportStartLocation}
+              reportEndLocation={reportEndLocation}
+              onSelectReportStart={handleSelectReportStart}
+              onSelectReportEnd={handleSelectReportEnd}
+              reportSelectionMode={reportSelectionMode}
+              onSetReportSelectionMode={setReportSelectionMode}
+              areMapControlsVisible={areMapControlsVisible}
             />
 
           </div>
@@ -588,8 +625,11 @@ function App() {
       <ReportConditionModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
-        location={reportLocation}
+        startLocation={reportStartLocation}
+        endLocation={reportEndLocation}
         user={user}
+        onSelectMapTarget={setReportSelectionMode}
+        onClearReportLocations={handleClearReportLocations}
         onConditionReported={() => {
           handleGenerateRoutes();
         }}
