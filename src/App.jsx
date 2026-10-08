@@ -24,6 +24,9 @@ import {
   GEOLOCATION_ERROR_CODES,
   shouldAcceptNewLocationFix,
   calculateNavigationProgress,
+  DEFAULT_REROUTE_COOLDOWN_MS,
+  shouldTriggerReroute,
+  executeAutomaticReroute,
 } from './services/index.js';
 
 
@@ -53,7 +56,7 @@ function App() {
   const [error, setError] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
 
-  // Live GPS User Tracking State
+  // Live GPS User Tracking & Rerouting State
   const [currentUserLocation, setCurrentUserLocation] = useState(null);
   const [previousUserLocation, setPreviousUserLocation] = useState(null);
   const [isLiveTracking, setIsLiveTracking] = useState(false);
@@ -61,12 +64,129 @@ function App() {
   const [trackingError, setTrackingError] = useState(null);
   const trackingWatchIdRef = useRef(null);
 
+  const [previousOffRouteState, setPreviousOffRouteState] = useState(null);
+  const previousOffRouteStateRef = useRef(null);
+  const lastReroutedGpsRef = useRef(null);
+  const [rerouteStatus, setRerouteStatus] = useState('IDLE');
+  const isReroutingRef = useRef(false);
+  const lastRerouteTimeRef = useRef(null);
+
   const navigationProgress = calculateNavigationProgress({
     currentUserLocation,
     selectedRoute,
     travelMode,
     previousLocation: previousUserLocation,
+    options: {
+      previousOffRouteState,
+    },
   });
+
+  const offRouteState = navigationProgress?.offRouteState;
+
+  // Keep state updated with latest offRouteState only when state values actually change
+  useEffect(() => {
+    if (offRouteState) {
+      previousOffRouteStateRef.current = offRouteState;
+      const currentOffRoute = offRouteState;
+      queueMicrotask(() => {
+        setPreviousOffRouteState((prev) => {
+          if (
+            prev?.status === currentOffRoute.status &&
+            prev?.confirmationCount === currentOffRoute.confirmationCount &&
+            prev?.routeId === currentOffRoute.routeId
+          ) {
+            return prev;
+          }
+          return currentOffRoute;
+        });
+      });
+    }
+  }, [offRouteState]);
+
+  // Automatic Rerouting Effect (GPS-8)
+  useEffect(() => {
+    const isArrived = navigationProgress?.isArrived;
+
+    const currentGpsKey = currentUserLocation
+      ? `${currentUserLocation.latitude}_${currentUserLocation.longitude}_${currentUserLocation.timestamp || 0}`
+      : null;
+
+    if (
+      shouldTriggerReroute({
+        offRouteState,
+        isRerouting: isReroutingRef.current,
+        lastRerouteTime: lastRerouteTimeRef.current,
+        isArrived,
+        cooldownMs: DEFAULT_REROUTE_COOLDOWN_MS,
+        lastReroutedGpsKey: lastReroutedGpsRef.current,
+        currentGpsKey,
+        currentRouteId: selectedRoute?.id,
+      })
+    ) {
+      isReroutingRef.current = true;
+      lastReroutedGpsRef.current = currentGpsKey;
+      setRerouteStatus('REROUTING');
+
+      executeAutomaticReroute({
+        currentUserLocation,
+        destinationLocation,
+        destination,
+        travelMode,
+        preferences,
+        areaId,
+        activeConditions,
+      })
+        .then((result) => {
+          lastRerouteTimeRef.current = Date.now();
+          isReroutingRef.current = false;
+
+          if (result.success && result.routes && result.routes.length > 0) {
+            setRoutes(result.routes);
+            setSelectedRoute(result.selectedRoute);
+            if (result.newOriginLocation) {
+              setOriginLocation(result.newOriginLocation);
+              setOrigin(result.newOriginLocation.name || 'My Location');
+            }
+            // Reset GPS-7 off-route state for new route
+            const resetState = {
+              routeId: result.selectedRoute.id,
+              status: 'ON_ROUTE',
+              confirmationCount: 0,
+              isOffRoute: false,
+              isUncertain: false,
+              isOnRoute: true,
+            };
+            previousOffRouteStateRef.current = resetState;
+            setPreviousOffRouteState(resetState);
+            setRerouteStatus('SUCCESS');
+
+            setTimeout(() => {
+              setRerouteStatus('IDLE');
+            }, 3000);
+          } else {
+            setRerouteStatus('FAILED');
+          }
+        })
+        .catch((err) => {
+          console.error('Reroute execution error:', err);
+          lastRerouteTimeRef.current = Date.now();
+          isReroutingRef.current = false;
+          setRerouteStatus('FAILED');
+        });
+    }
+  }, [
+    offRouteState,
+    navigationProgress?.isArrived,
+    currentUserLocation,
+    destinationLocation,
+    destination,
+    travelMode,
+    preferences,
+    areaId,
+    activeConditions,
+    selectedRoute?.id,
+  ]);
+
 
 
 
@@ -319,8 +439,14 @@ function App() {
     }
   }, [origin, destination, originLocation, destinationLocation, preferences, travelMode]);
 
-  // Re-calculate routes when active conditions update
+  // Re-calculate routes ONLY when active conditions update
+  const prevActiveConditionsRef = useRef(activeConditions);
   useEffect(() => {
+    if (prevActiveConditionsRef.current === activeConditions) {
+      return;
+    }
+    prevActiveConditionsRef.current = activeConditions;
+
     let isMounted = true;
     queueMicrotask(() => {
       if (isMounted) {
@@ -370,6 +496,7 @@ function App() {
               navigationProgress={navigationProgress}
               isLiveTracking={isLiveTracking}
               selectedRoute={selectedRoute}
+              rerouteStatus={rerouteStatus}
             />
           )}
 

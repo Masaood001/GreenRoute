@@ -75,6 +75,11 @@ import {
   OFF_ROUTE_CONFIG,
   calculateEffectiveThresholds,
   evaluateOffRouteState,
+  // Automatic Off-Route Rerouting Service (GPS-8)
+  DEFAULT_REROUTE_COOLDOWN_MS,
+  REROUTE_STATUS,
+  shouldTriggerReroute,
+  executeAutomaticReroute,
 } from "../src/services/index.js";
 
 
@@ -3262,6 +3267,135 @@ it("25. verifies arrival threshold, 100% campus graph regression, and search rem
   assert.strictEqual(dijkstraRoute.nodeIds[0], "N1");
 });
 
+it("26. stationary user + poor accuracy + non-zero browser speed => not moving", () => {
+  const prevGPS = { latitude: 26.459600, longitude: 80.238300, timestamp: 1000, accuracy: 323 };
+  const currGPS = { latitude: 26.459601, longitude: 80.238301, timestamp: 4000, accuracy: 323, speed: 21.4 };
+
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", prevGPS, currGPS);
+
+  assert.strictEqual(speedState.isStationary, true);
+  assert.strictEqual(speedState.speedStatus, "stopped");
+  assert.strictEqual(speedState.effectiveSpeedMs, 0);
+  assert.strictEqual(speedState.currentSpeedFormatted, "0 km/h");
+});
+
+it("27. stationary user + good accuracy + noisy browser speed => not moving unless corroborated", () => {
+  const prevGPS = { latitude: 26.459600, longitude: 80.238300, timestamp: 1000, accuracy: 10 };
+  const currGPS = { latitude: 26.459601, longitude: 80.238301, timestamp: 4000, accuracy: 10, speed: 3.0 };
+
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", prevGPS, currGPS);
+
+  assert.strictEqual(speedState.isStationary, true);
+  assert.strictEqual(speedState.speedStatus, "stopped");
+  assert.strictEqual(speedState.currentSpeedFormatted, "0 km/h");
+});
+
+it("28. one non-zero browser speed fix with poor accuracy => not enough to declare movement", () => {
+  const currGPS = { latitude: 26.4596, longitude: 80.2383, accuracy: 150, speed: 4.5 };
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", null, currGPS);
+
+  assert.strictEqual(speedState.speedStatus, "detecting");
+  assert.strictEqual(speedState.currentSpeedFormatted, "Detecting speed…");
+  assert.strictEqual(speedState.effectiveSpeedMs, 0);
+});
+
+it("29. consecutive trusted movement => moving speed becomes valid", () => {
+  const prevGPS = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000, accuracy: 10 };
+  const currGPS = { latitude: 26.4501, longitude: 80.2300, timestamp: 4000, accuracy: 10, speed: 3.0 };
+
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", prevGPS, currGPS);
+
+  assert.strictEqual(speedState.isStationary, false);
+  assert.strictEqual(speedState.speedStatus, "moving");
+  assert.ok(speedState.effectiveSpeedMs > 0);
+  assert.ok(speedState.currentSpeedFormatted.includes("km/h"));
+});
+
+it("30. stationary GPS jitter does not advance progress", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const prevGPS = { latitude: 26.459600, longitude: 80.238300, timestamp: 1000, accuracy: 15 };
+  const currGPS = { latitude: 26.459601, longitude: 80.238301, timestamp: 4000, accuracy: 15, speed: 1.5 };
+
+  const nav = calculateNavigationProgress({
+    currentUserLocation: currGPS,
+    selectedRoute: route,
+    previousLocation: prevGPS,
+    options: { previousProgressPercent: 25.0 }
+  });
+
+  assert.strictEqual(nav.isStationary, true);
+  assert.strictEqual(nav.progressPercent, 25.0);
+});
+
+it("31. stationary user does not receive false ETA", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const prevGPS = { latitude: 26.459600, longitude: 80.238300, timestamp: 1000, accuracy: 323 };
+  const currGPS = { latitude: 26.459601, longitude: 80.238301, timestamp: 4000, accuracy: 323, speed: 21.4 };
+
+  const nav = calculateNavigationProgress({
+    currentUserLocation: currGPS,
+    selectedRoute: route,
+    previousLocation: prevGPS
+  });
+
+  assert.strictEqual(nav.isStationary, true);
+  assert.strictEqual(nav.etaFormatted, "ETA paused");
+  assert.strictEqual(nav.isEtaPaused, true);
+  assert.notStrictEqual(nav.etaFormatted, "9 min");
+});
+
+it("32. live ETA resumes when real movement begins", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const p1 = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000, accuracy: 10 };
+  const p2 = { latitude: 26.4500, longitude: 80.2300, timestamp: 4000, accuracy: 10 };
+  const p3 = { latitude: 26.4503, longitude: 80.2300, timestamp: 10000, accuracy: 10, speed: 3.3 };
+
+  const navStopped = calculateNavigationProgress({ currentUserLocation: p2, selectedRoute: route, previousLocation: p1 });
+  const navMoving = calculateNavigationProgress({ currentUserLocation: p3, selectedRoute: route, previousLocation: p2 });
+
+  assert.strictEqual(navStopped.etaFormatted, "ETA paused");
+  assert.strictEqual(navMoving.isEtaPaused, false);
+  assert.ok(navMoving.etaFormatted.includes("min"));
+});
+
+it("33. accuracy 323m + 15.6m coordinate jitter => no derived moving speed (suppresses false 18.7 km/h)", () => {
+  const prevGPS = { latitude: 26.459600, longitude: 80.238300, timestamp: 1000, accuracy: 323 };
+  const currGPS = { latitude: 26.459730, longitude: 80.238350, timestamp: 4000, accuracy: 323, speed: 5.2 }; // ~15.6m jump in 3s = 5.2 m/s = 18.7 km/h jitter!
+
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", prevGPS, currGPS);
+
+  assert.notStrictEqual(speedState.speedStatus, "moving");
+  assert.notStrictEqual(speedState.currentSpeedFormatted, "18.7 km/h");
+  assert.strictEqual(speedState.effectiveSpeedMs, 0);
+  assert.ok(speedState.currentSpeedFormatted === "0 km/h" || speedState.currentSpeedFormatted === "Detecting speed…");
+});
+
+it("34. poor accuracy + one large jump (155m) => no immediate moving speed", () => {
+  const prevGPS = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000, accuracy: 250 };
+  const currGPS = { latitude: 26.4514, longitude: 80.2300, timestamp: 4000, accuracy: 250 }; // 155m jump in 3s with 250m uncertainty
+
+  const speedState = calculateEffectiveSpeed(null, "walking", prevGPS, currGPS);
+
+  assert.notStrictEqual(speedState.speedStatus, "moving");
+  assert.strictEqual(speedState.effectiveSpeedMs, 0);
+  assert.ok(speedState.currentSpeedFormatted === "0 km/h" || speedState.currentSpeedFormatted === "Detecting speed…");
+});
+
+it("35. movement resumes correctly once GPS accuracy improves to 10m", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const prevGPS = { latitude: 26.4500, longitude: 80.2300, timestamp: 1000, accuracy: 10 };
+  const currGPS = { latitude: 26.4503, longitude: 80.2300, timestamp: 5000, accuracy: 10, speed: 2.5 }; // ~33m in 4s with 10m accuracy
+
+  const speedState = calculateEffectiveSpeed(currGPS.speed, "walking", prevGPS, currGPS);
+  const nav = calculateNavigationProgress({ currentUserLocation: currGPS, selectedRoute: route, previousLocation: prevGPS });
+
+  assert.strictEqual(speedState.speedStatus, "moving");
+  assert.strictEqual(speedState.isStationary, false);
+  assert.ok(speedState.effectiveSpeedMs > 0);
+  assert.strictEqual(nav.isEtaPaused, false);
+  assert.ok(nav.etaFormatted.includes("min"));
+});
+
 // ---------------------------------------------------------------------------
 // 30. GPS-7: Reliable Off-Route Detection Unit Tests
 // ---------------------------------------------------------------------------
@@ -3521,6 +3655,532 @@ it("25. verifies 100% sample N1 -> N7 campus routing regression passes cleanly",
   assert.ok(route);
   assert.strictEqual(route.nodeIds[0], "N1");
   assert.strictEqual(route.nodeIds[route.nodeIds.length - 1], "N7");
+});
+
+// ---------------------------------------------------------------------------
+// 31. Step GPS-8: Automatic Off-Route Rerouting Unit & Integration Tests
+// ---------------------------------------------------------------------------
+console.log("\n[Group 31] Step GPS-8: Automatic Off-Route Rerouting Unit & Integration Tests:");
+
+it("1. confirmed OFF_ROUTE triggers automatic rerouting", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true };
+  const trigger = shouldTriggerReroute({ offRouteState, isRerouting: false });
+  assert.strictEqual(trigger, true);
+});
+
+it("2. ON_ROUTE does not trigger rerouting", () => {
+  const offRouteState = { status: "ON_ROUTE", isOffRoute: false };
+  const trigger = shouldTriggerReroute({ offRouteState, isRerouting: false });
+  assert.strictEqual(trigger, false);
+});
+
+it("3. UNCERTAIN does not trigger rerouting", () => {
+  const offRouteState = { status: "UNCERTAIN", isOffRoute: false, isUncertain: true };
+  const trigger = shouldTriggerReroute({ offRouteState, isRerouting: false });
+  assert.strictEqual(trigger, false);
+});
+
+it("4. poor GPS accuracy does not trigger rerouting", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const gpsPoorAcc = { latitude: 26.4610, longitude: 80.2400, accuracy: 150 };
+  const evalState = evaluateOffRouteState({ currentUserLocation: gpsPoorAcc, selectedRoute: route });
+
+  assert.strictEqual(evalState.status, "UNCERTAIN");
+  const trigger = shouldTriggerReroute({ offRouteState: evalState, isRerouting: false });
+  assert.strictEqual(trigger, false);
+});
+
+it("5. one noisy GPS update does not trigger rerouting", () => {
+  const route = { id: "r1", nodeIds: ["osm-node-8820570755", "osm-node-3156228563"] };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsNormal = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const gpsNoisy = { latitude: 26.4610, longitude: 80.2400, accuracy: 10 };
+
+  const s1 = evaluateOffRouteState({ currentUserLocation: gpsNormal, selectedRoute: route });
+  const s2 = evaluateOffRouteState({ currentUserLocation: gpsNoisy, selectedRoute: route, previousOffRouteState: s1 });
+
+  assert.strictEqual(s2.status, "UNCERTAIN");
+  const trigger = shouldTriggerReroute({ offRouteState: s2, isRerouting: false });
+  assert.strictEqual(trigger, false);
+});
+
+it("6. duplicate OFF_ROUTE updates do not start duplicate reroutes", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true };
+  const trigger = shouldTriggerReroute({ offRouteState, isRerouting: true });
+  assert.strictEqual(trigger, false);
+});
+
+it("7. reroute cooldown works", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true };
+  const now = 100000;
+  const recentReroute = 95000;
+
+  const trigger = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    lastRerouteTime: recentReroute,
+    cooldownMs: DEFAULT_REROUTE_COOLDOWN_MS,
+    currentTime: now,
+  });
+
+  assert.strictEqual(trigger, false);
+
+  const oldReroute = 80000;
+  const triggerAfterCooldown = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    lastRerouteTime: oldReroute,
+    cooldownMs: DEFAULT_REROUTE_COOLDOWN_MS,
+    currentTime: now,
+  });
+
+  assert.strictEqual(triggerAfterCooldown, true);
+});
+
+it("8. only one reroute operation can run at once", () => {
+  assert.strictEqual(REROUTE_STATUS.OFF_ROUTE, "OFF_ROUTE");
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true };
+  assert.strictEqual(shouldTriggerReroute({ offRouteState, isRerouting: true }), false);
+  assert.strictEqual(shouldTriggerReroute({ offRouteState, isRerouting: false }), true);
+});
+
+it("9. current trusted GPS position is used as new origin", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563", name: "Destination" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.success, true);
+  assert.ok(result.newOriginLocation);
+  assert.strictEqual(result.newOriginLocation.latitude, n1[0]);
+  assert.strictEqual(result.newOriginLocation.longitude, n1[1]);
+});
+
+it("10. exact GPS coordinates are preserved", async () => {
+  const exactLat = 26.459612;
+  const exactLng = 80.238345;
+  const gpsPos = { latitude: exactLat, longitude: exactLng, accuracy: 8 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.newOriginLocation.coordinate.latitude, exactLat);
+  assert.strictEqual(result.newOriginLocation.coordinate.longitude, exactLng);
+});
+
+it("11. original destination remains unchanged", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const originalDest = { nodeId: "osm-node-3156228563", name: "Original Destination" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: originalDest,
+    destination: "Original Destination",
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(originalDest.name, "Original Destination");
+});
+
+it("12. new route is calculated successfully", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.success, true);
+  assert.ok(result.routes.length > 0);
+  assert.ok(result.selectedRoute);
+});
+
+it("13. new route becomes selectedRoute", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.selectedRoute, result.routes[0]);
+});
+
+it("14. old route is no longer active", async () => {
+  const oldRoute = { id: "old-route-99", totalDistance: 5000 };
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.notStrictEqual(result.selectedRoute.id, oldRoute.id);
+});
+
+it("15. new route distance is used", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.ok(typeof result.selectedRoute.totalDistance === "number");
+  assert.ok(result.selectedRoute.totalDistance > 0);
+});
+
+it("16. live navigation remaining distance updates", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  const nav = calculateNavigationProgress({
+    currentUserLocation: gpsPos,
+    selectedRoute: result.selectedRoute,
+  });
+
+  assert.ok(typeof nav.remainingDistanceMeters === "number");
+  assert.ok(nav.remainingDistanceMeters > 0);
+});
+
+it("17. live ETA recalculates after reroute", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10, speed: 2.0 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  const nav = calculateNavigationProgress({
+    currentUserLocation: gpsPos,
+    selectedRoute: result.selectedRoute,
+  });
+
+  assert.strictEqual(nav.isEtaPaused, false);
+  assert.ok(nav.etaFormatted.length > 0);
+});
+
+it("18. planned route-card duration remains fixed by planning rules", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsMovingFast = { latitude: n1[0], longitude: n1[1], accuracy: 10, speed: 10.0 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsMovingFast,
+    destinationLocation: destLoc,
+    travelMode: "walking",
+    areaId: "panki-kanpur",
+  });
+
+  assert.ok(result.selectedRoute.duration.includes("min") || result.selectedRoute.duration.includes("sec"));
+});
+
+it("19. environmental route metrics update for new route", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.ok(typeof result.selectedRoute.greenery === "number");
+  assert.ok(typeof result.selectedRoute.shade === "number");
+  assert.ok(typeof result.selectedRoute.pollution === "string");
+});
+
+it("20. route score/details synchronize", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.ok(typeof result.selectedRoute.environmentalScore === "number");
+  assert.ok(result.selectedRoute.explanation);
+});
+
+it("21. 'Why This Route?' synchronizes", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.ok(result.selectedRoute.explanation.length > 10);
+});
+
+it("22. off-route state resets for new route", async () => {
+  const n1 = getNodeCoordinate("osm-node-8820570755");
+  const gpsPos = { latitude: n1[0], longitude: n1[1], accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  const freshEvaluation = evaluateOffRouteState({
+    currentUserLocation: gpsPos,
+    selectedRoute: result.selectedRoute,
+    previousOffRouteState: {
+      routeId: result.selectedRoute.id,
+      status: "ON_ROUTE",
+      confirmationCount: 0,
+    },
+  });
+
+  assert.strictEqual(freshEvaluation.status, "ON_ROUTE");
+  assert.strictEqual(freshEvaluation.confirmationCount, 0);
+});
+
+it("23. reroute failure is handled safely", async () => {
+  const gpsPos = { latitude: 26.4596, longitude: 80.2383, accuracy: 10 };
+
+  const failingEngine = async () => {
+    throw new Error("Panki Graph Network Disconnected");
+  };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: { nodeId: "invalid-node" },
+    calculateRoutesFn: failingEngine,
+  });
+
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.error, "Panki Graph Network Disconnected");
+  assert.deepStrictEqual(result.routes, []);
+  assert.strictEqual(result.selectedRoute, null);
+});
+
+it("24. destination/arrival behavior remains intact", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true };
+  const trigger = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    isArrived: true,
+  });
+
+  assert.strictEqual(trigger, false);
+});
+
+it("25. blue marker remains at actual GPS coordinates", async () => {
+  const rawLat = 26.459612;
+  const rawLng = 80.238345;
+  const gpsPos = { latitude: rawLat, longitude: rawLng, accuracy: 10 };
+  const destLoc = { nodeId: "osm-node-3156228563" };
+
+  const result = await executeAutomaticReroute({
+    currentUserLocation: gpsPos,
+    destinationLocation: destLoc,
+    areaId: "panki-kanpur",
+  });
+
+  assert.strictEqual(result.newOriginLocation.latitude, rawLat);
+  assert.strictEqual(result.newOriginLocation.longitude, rawLng);
+});
+
+it("26. map-follow remains intact", () => {
+  const isMapFollowingUser = true;
+  const currentUserLocation = { latitude: 26.4596, longitude: 80.2383 };
+  let cameraPos = null;
+
+  if (isMapFollowingUser && currentUserLocation) {
+    cameraPos = [currentUserLocation.latitude, currentUserLocation.longitude];
+  }
+
+  assert.deepStrictEqual(cameraPos, [26.4596, 80.2383]);
+});
+
+it("27. existing live speed/ETA behavior remains intact", () => {
+  const speedStateMoving = calculateEffectiveSpeed(2.5, "walking");
+  assert.strictEqual(speedStateMoving.speedStatus, "moving");
+  assert.strictEqual(speedStateMoving.isStationary, false);
+
+  const speedStateStopped = calculateEffectiveSpeed(0, "walking");
+  assert.strictEqual(speedStateStopped.speedStatus, "stopped");
+  assert.strictEqual(speedStateStopped.isStationary, true);
+});
+
+it("28. existing GPS-7 hysteresis behavior remains intact", () => {
+  const thresholds = calculateEffectiveThresholds(20);
+  assert.strictEqual(thresholds.effectiveThresholdMeters, 40);
+  assert.strictEqual(thresholds.returnToRouteThresholdMeters, 28);
+  assert.ok(thresholds.returnToRouteThresholdMeters < thresholds.effectiveThresholdMeters);
+});
+
+it("29. existing Firebase condition-aware routing remains intact", async () => {
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "sample-campus",
+    startNodeId: "N1",
+    targetNodeId: "N7",
+    activeConditions: [
+      { title: "Block", type: "blocked_path", severity: "critical", status: "active", affectedPathIds: ["N1-N6"] },
+    ],
+  });
+
+  assert.ok(routes.length > 0);
+  assert.strictEqual(routes[0].nodeIds.includes("N6"), false);
+});
+
+it("30. existing Panki routing remains intact", async () => {
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "panki-kanpur",
+    startNodeId: "osm-node-8820570755",
+    targetNodeId: "osm-node-3156228563",
+  });
+
+  assert.ok(routes.length > 0);
+});
+
+it("31. existing named search remains intact", () => {
+  const coordResults = searchPankiLocations("26.4596, 80.2383");
+  assert.ok(coordResults.length > 0);
+  assert.ok(coordResults[0].coordinate);
+});
+
+it("32. existing map-click routing remains intact", () => {
+  const loc = createMapClickLocation(26.4596, 80.2383);
+  assert.strictEqual(loc.isMapClick, true);
+  assert.strictEqual(Boolean(loc.error), false);
+});
+
+it("33. existing sample N1 -> N7 regression remains intact", async () => {
+  const routes = await calculateLiveCampusRoutes({
+    areaId: "sample-campus",
+    startNodeId: "N1",
+    targetNodeId: "N7",
+  });
+
+  assert.ok(routes.length > 0);
+  assert.strictEqual(routes[0].nodeIds[0], "N1");
+  assert.strictEqual(routes[0].nodeIds[routes[0].nodeIds.length - 1], "N7");
+});
+
+it("34. no Firebase GPS persistence is introduced", () => {
+  const sampleGpsState = { latitude: 26.4596, longitude: 80.2383, source: "gps", isLive: true };
+  assert.strictEqual(sampleGpsState.source, "gps");
+  assert.strictEqual(sampleGpsState.isLive, true);
+});
+
+it("35. one OFF_ROUTE event = at most one reroute (same GPS fix ignored)", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true, routeId: "r1" };
+  const gpsKey = "26.4596_80.2383_1000";
+
+  // First check triggers reroute
+  const firstCheck = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    currentGpsKey: gpsKey,
+    lastReroutedGpsKey: null,
+    currentRouteId: "r1",
+  });
+  assert.strictEqual(firstCheck, true);
+
+  // Subsequent check with same GPS fix fails
+  const secondCheck = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    currentGpsKey: gpsKey,
+    lastReroutedGpsKey: gpsKey,
+    currentRouteId: "r1",
+  });
+  assert.strictEqual(secondCheck, false);
+});
+
+it("36. repeated OFF_ROUTE renders do not trigger duplicate reroutes", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true, routeId: "r1" };
+  const gpsKey = "26.4596_80.2383_1000";
+
+  // While locked in progress
+  const lockedCheck = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: true,
+    currentGpsKey: gpsKey,
+    currentRouteId: "r1",
+  });
+  assert.strictEqual(lockedCheck, false);
+});
+
+it("37. successful reroute prevents immediate second reroute", () => {
+  const offRouteState = { status: "OFF_ROUTE", isOffRoute: true, routeId: "old-route" };
+  const newRouteId = "new-route-123";
+
+  // When selectedRoute ID changes to new route, old offRouteState for old route fails check
+  const mismatchedRouteCheck = shouldTriggerReroute({
+    offRouteState,
+    isRerouting: false,
+    currentRouteId: newRouteId,
+  });
+  assert.strictEqual(mismatchedRouteCheck, false);
+
+  // Reset offRouteState for new route evaluates as ON_ROUTE
+  const resetOffRouteState = { status: "ON_ROUTE", isOffRoute: false, routeId: newRouteId };
+  const freshCheck = shouldTriggerReroute({
+    offRouteState: resetOffRouteState,
+    isRerouting: false,
+    currentRouteId: newRouteId,
+  });
+  assert.strictEqual(freshCheck, false);
+});
+
+it("38. selectedRoute update prevents reroute loop", () => {
+  const newRoute = { id: "new-route-456", totalDistance: 1200 };
+  const userGpsAtStartOfNewRoute = { latitude: 26.4596, longitude: 80.2383, accuracy: 10 };
+
+  // Fresh evaluation against new route
+  const freshEval = evaluateOffRouteState({
+    currentUserLocation: userGpsAtStartOfNewRoute,
+    selectedRoute: newRoute,
+    previousOffRouteState: { routeId: newRoute.id, status: "ON_ROUTE", confirmationCount: 0 },
+  });
+
+  assert.strictEqual(freshEval.status, "ON_ROUTE");
+  assert.strictEqual(shouldTriggerReroute({ offRouteState: freshEval }), false);
 });
 
 

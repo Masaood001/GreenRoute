@@ -253,37 +253,19 @@ export function calculateEffectiveSpeed(
 ) {
   const planningFallbackSpeedMs = DEFAULT_TRAVEL_SPEEDS_MS[travelMode] || DEFAULT_TRAVEL_SPEEDS_MS.walking;
 
-  // 1. Check browser-reported GPS speed first
-  if (typeof gpsSpeed === 'number' && !isNaN(gpsSpeed) && gpsSpeed >= 0) {
-    if (gpsSpeed < STATIONARY_SPEED_THRESHOLD_MS) {
-      return {
-        effectiveSpeedMs: 0,
-        liveSpeedKmh: 0,
-        speedSource: 'gps',
-        speedStatus: 'stopped',
-        isStationary: true,
-        currentSpeedFormatted: '0 km/h',
-        isFromGps: true,
-        planningFallbackSpeedMs,
-      };
-    }
-    const speedMs = options.previousSpeedMs
-      ? smoothSpeedMs(gpsSpeed, options.previousSpeedMs)
-      : gpsSpeed;
-    const speedKmh = convertMsToKmh(speedMs);
-    return {
-      effectiveSpeedMs: speedMs,
-      liveSpeedKmh: speedKmh,
-      speedSource: 'gps',
-      speedStatus: 'moving',
-      isStationary: false,
-      currentSpeedFormatted: `${speedKmh} km/h`,
-      isFromGps: true,
-      planningFallbackSpeedMs,
-    };
-  }
+  const rawGpsSpeed = (typeof gpsSpeed === 'number' && !isNaN(gpsSpeed) && gpsSpeed >= 0)
+    ? gpsSpeed
+    : null;
 
-  // 2. Check derived speed from consecutive trusted GPS fixes
+  const currentAcc = currentGPS && typeof currentGPS.accuracy === 'number' && !isNaN(currentGPS.accuracy)
+    ? currentGPS.accuracy
+    : 0;
+
+  const isPoorAccuracy = currentGPS
+    ? (currentAcc >= 100 || getAccuracyClassification(currentAcc).isLowAccuracy)
+    : false;
+
+  // 1. Evaluate consecutive GPS fix movement if both fixes are present
   if (
     previousGPS && currentGPS &&
     typeof previousGPS.latitude === 'number' && typeof previousGPS.longitude === 'number' &&
@@ -326,8 +308,33 @@ export function calculateEffectiveSpeed(
         currentGPS.latitude, currentGPS.longitude
       );
 
-      // Noise filter for small jitter when stationary
-      if (distMeters < 1.0) {
+      // Accuracy-Aware Movement Threshold (Requirements 2, 3, & 5):
+      // When GPS accuracy is poor (>100m or >150m), coordinate displacement caused by GPS jitter
+      // (e.g. 15–50+ meters) must NOT be interpreted as real movement!
+      const prevAcc = typeof previousGPS.accuracy === 'number' && !isNaN(previousGPS.accuracy) ? previousGPS.accuracy : 0;
+      const currAcc = typeof currentGPS.accuracy === 'number' && !isNaN(currentGPS.accuracy) ? currentGPS.accuracy : 0;
+      const maxUncertaintyMeters = Math.max(prevAcc, currAcc);
+
+      // Accuracy-aware minimum required displacement before treating movement as real
+      const minRequiredMovementMeters = Math.max(3.0, maxUncertaintyMeters * 0.5);
+      const isVeryPoorAcc = currAcc > 150 || prevAcc > 150;
+
+      // Noise filter: if displacement is within GPS uncertainty bounds OR accuracy is very poor (>150m)
+      if (distMeters < minRequiredMovementMeters || isVeryPoorAcc) {
+        // If accuracy is poor (>150m) and displacement is non-zero, report "Detecting speed…"
+        if (isVeryPoorAcc && distMeters >= 2.0) {
+          return {
+            effectiveSpeedMs: 0,
+            liveSpeedKmh: 0,
+            speedSource: 'unknown',
+            speedStatus: 'detecting',
+            isStationary: false,
+            currentSpeedFormatted: 'Detecting speed…',
+            isFromGps: false,
+            planningFallbackSpeedMs,
+          };
+        }
+
         return {
           effectiveSpeedMs: 0,
           liveSpeedKmh: 0,
@@ -369,25 +376,80 @@ export function calculateEffectiveSpeed(
         };
       }
 
+      // Meaningful movement across consecutive trusted GPS updates is confirmed!
+      let chosenSpeedMs = rawDerivedSpeed;
+      let speedSource = 'derived';
+
+      // Only trust raw browser speed if accuracy is GOOD (< 100m) AND browser speed is valid
+      if (!isPoorAccuracy && rawGpsSpeed !== null && rawGpsSpeed >= STATIONARY_SPEED_THRESHOLD_MS) {
+        chosenSpeedMs = rawGpsSpeed;
+        speedSource = 'gps';
+      }
+
       const speedMs = options.previousSpeedMs
-        ? smoothSpeedMs(rawDerivedSpeed, options.previousSpeedMs)
-        : rawDerivedSpeed;
+        ? smoothSpeedMs(chosenSpeedMs, options.previousSpeedMs)
+        : chosenSpeedMs;
       const speedKmh = convertMsToKmh(speedMs);
 
       return {
         effectiveSpeedMs: speedMs,
         liveSpeedKmh: speedKmh,
-        speedSource: 'derived',
+        speedSource,
         speedStatus: 'moving',
         isStationary: false,
         currentSpeedFormatted: `${speedKmh} km/h`,
-        isFromGps: false,
+        isFromGps: speedSource === 'gps',
         planningFallbackSpeedMs,
       };
     }
   }
 
-  // 3. Unknown / Detecting speed state (before enough GPS data exists)
+  // 2. Single fix handling or no location objects provided
+  if (rawGpsSpeed !== null && rawGpsSpeed < STATIONARY_SPEED_THRESHOLD_MS) {
+    return {
+      effectiveSpeedMs: 0,
+      liveSpeedKmh: 0,
+      speedSource: 'gps',
+      speedStatus: 'stopped',
+      isStationary: true,
+      currentSpeedFormatted: '0 km/h',
+      isFromGps: true,
+      planningFallbackSpeedMs,
+    };
+  }
+
+  // If GPS accuracy is poor (e.g. 323 m), single fix with non-zero browser speed is untrusted
+  if (isPoorAccuracy) {
+    return {
+      effectiveSpeedMs: 0,
+      liveSpeedKmh: 0,
+      speedSource: 'unknown',
+      speedStatus: 'detecting',
+      isStationary: false,
+      currentSpeedFormatted: 'Detecting speed…',
+      isFromGps: false,
+      planningFallbackSpeedMs,
+    };
+  }
+
+  // Good accuracy fix or simple invocation with valid non-zero browser speed
+  if (rawGpsSpeed !== null && rawGpsSpeed >= STATIONARY_SPEED_THRESHOLD_MS) {
+    const speedMs = options.previousSpeedMs
+      ? smoothSpeedMs(rawGpsSpeed, options.previousSpeedMs)
+      : rawGpsSpeed;
+    const speedKmh = convertMsToKmh(speedMs);
+    return {
+      effectiveSpeedMs: speedMs,
+      liveSpeedKmh: speedKmh,
+      speedSource: 'gps',
+      speedStatus: 'moving',
+      isStationary: false,
+      currentSpeedFormatted: `${speedKmh} km/h`,
+      isFromGps: true,
+      planningFallbackSpeedMs,
+    };
+  }
+
   return {
     effectiveSpeedMs: 0,
     liveSpeedKmh: 0,
@@ -637,10 +699,13 @@ export function calculateNavigationProgress({
   );
 
   // 5. Off-Route Evaluation (STEP GPS-7)
+  const prevOffRoute = options.previousOffRouteState ||
+    (typeof options.getPreviousOffRouteState === 'function' ? options.getPreviousOffRouteState() : null);
+
   const offRouteState = evaluateOffRouteState({
     currentUserLocation,
     selectedRoute,
-    previousOffRouteState: options.previousOffRouteState || null,
+    previousOffRouteState: prevOffRoute,
   });
 
   // 6. Arrival & Status Detection
@@ -651,6 +716,15 @@ export function calculateNavigationProgress({
   let etaObj = { etaSeconds: 0, etaFormatted: '0 min', isEtaPaused: false };
   let statusKey = 'NAVIGATING';
   let statusText = 'Live navigation';
+
+  // Requirement 7: Stationary GPS jitter must not artificially increase route progress
+  if (
+    (speedState.isStationary || speedState.speedStatus === 'stopped' || speedState.speedStatus === 'detecting') &&
+    typeof options.previousProgressPercent === 'number' &&
+    !isNaN(options.previousProgressPercent)
+  ) {
+    finalProgressPercent = options.previousProgressPercent;
+  }
 
   const accClassification = getAccuracyClassification(currentUserLocation.accuracy);
   if (accClassification.isLowAccuracy) {

@@ -13,6 +13,7 @@ export default function NavigationProgress({
   navigationProgress = null,
   isLiveTracking = false,
   selectedRoute = null,
+  rerouteStatus = 'IDLE',
 }) {
   if (!isLiveTracking && !selectedRoute) {
     return null;
@@ -40,6 +41,44 @@ export default function NavigationProgress({
     isNavigationActive = false,
   } = progress;
 
+  let displayStatusText = statusText;
+  let statusBadgeStyle = 'bg-blue-50 text-blue-700';
+  let dotStyle = 'bg-blue-600 animate-pulse';
+
+  if (isArrived) {
+    displayStatusText = statusText || 'Arrived at destination';
+    statusBadgeStyle = 'bg-emerald-100 text-emerald-800';
+    dotStyle = 'bg-emerald-500 animate-pulse';
+  } else if (rerouteStatus === 'REROUTING') {
+    displayStatusText = 'Rerouting…';
+    statusBadgeStyle = 'bg-amber-100 text-amber-800 border border-amber-300';
+    dotStyle = 'bg-amber-500 animate-pulse';
+  } else if (rerouteStatus === 'SUCCESS') {
+    displayStatusText = 'New route found';
+    statusBadgeStyle = 'bg-emerald-100 text-emerald-800';
+    dotStyle = 'bg-emerald-500 animate-pulse';
+  } else if (rerouteStatus === 'FAILED') {
+    displayStatusText = 'Unable to reroute';
+    statusBadgeStyle = 'bg-rose-100 text-rose-800';
+    dotStyle = 'bg-rose-500';
+  } else if (isOffRoute) {
+    displayStatusText = "You're off route";
+    statusBadgeStyle = 'bg-rose-100 text-rose-800';
+    dotStyle = 'bg-rose-500 animate-pulse';
+  } else if (isUncertain) {
+    displayStatusText = statusText || 'Checking route position…';
+    statusBadgeStyle = 'bg-amber-100 text-amber-800';
+    dotStyle = 'bg-amber-400 animate-pulse';
+  } else if (isNavigationActive) {
+    displayStatusText = statusText || 'Live navigation';
+    statusBadgeStyle = 'bg-blue-50 text-blue-700';
+    dotStyle = 'bg-blue-600 animate-pulse';
+  } else {
+    displayStatusText = statusText || 'Waiting for route';
+    statusBadgeStyle = 'bg-slate-100 text-slate-600';
+    dotStyle = 'bg-slate-400';
+  }
+
   const clampedPercent = Math.max(0, Math.min(100, Math.round(progressPercent)));
 
   return (
@@ -47,33 +86,13 @@ export default function NavigationProgress({
       {/* Header Badge */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${
-            isArrived
-              ? 'bg-emerald-500 animate-pulse'
-              : isOffRoute
-              ? 'bg-rose-500 animate-pulse'
-              : isUncertain
-              ? 'bg-amber-400 animate-pulse'
-              : isNavigationActive
-              ? 'bg-blue-600 animate-pulse'
-              : 'bg-slate-400'
-          }`}></div>
+          <div className={`w-2.5 h-2.5 rounded-full ${dotStyle}`}></div>
           <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
             Navigation Progress
           </span>
         </div>
-        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-md ${
-          isArrived
-            ? 'bg-emerald-100 text-emerald-800'
-            : isOffRoute
-            ? 'bg-rose-100 text-rose-800'
-            : isUncertain
-            ? 'bg-amber-100 text-amber-800'
-            : isNavigationActive
-            ? 'bg-blue-50 text-blue-700'
-            : 'bg-slate-100 text-slate-600'
-        }`}>
-          {statusText}
+        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-md ${statusBadgeStyle}`}>
+          {displayStatusText}
         </span>
       </div>
 

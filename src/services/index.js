@@ -117,3 +117,11 @@ export {
   calculateEffectiveThresholds,
   evaluateOffRouteState,
 } from "./offRouteService.js";
+
+// Automatic Off-Route Rerouting Service (Step GPS-8)
+export {
+  DEFAULT_REROUTE_COOLDOWN_MS,
+  REROUTE_STATUS,
+  shouldTriggerReroute,
+  executeAutomaticReroute,
+} from "./rerouteService.js";
